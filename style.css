@@ -57,6 +57,7 @@ body {
 .team-block h4 { color: #4cc9f0; display: flex; justify-content: space-between; margin-bottom: 8px;}
 .team-block ul { list-style: none; font-size: 0.85rem; color: #cbd5e1; }
 .team-block li { border-bottom: 1px solid #334155; padding: 4px 0; }
+.squad-ovr { float: right; color: #ffd166; font-size: 0.78rem; }
 
 h1 { font-size: 2.2rem; margin-bottom: 8px; color: #4cc9f0; text-transform: uppercase; letter-spacing: 2px; }
 p.subtitle { font-size: 0.95rem; color: #94a3b8; margin-bottom: 20px; }
@@ -83,6 +84,7 @@ input[type="text"]:focus { border-color: #4cc9f0; }
     border-radius: 8px; border: 1px solid #334155;
 }
 .builder-row span { font-weight: bold; color: #ffffff; font-size: 1.1rem; }
+.builder-row small { display: block; color: #94a3b8; font-size: 0.75rem; margin-top: 3px; }
 .pos-select {
     padding: 8px; border-radius: 6px; background-color: #1e293b;
     color: #4cc9f0; border: 1px solid #4cc9f0; font-weight: bold; outline: none; cursor: pointer;

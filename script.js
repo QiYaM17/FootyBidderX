@@ -12,11 +12,16 @@ let currentCard = null;
 let currentBid = 0;
 let highestBidder = "None";
 let bidTimerInterval;
-let timeLeft = 7;
-const INITIAL_TIMER = 7;
-const POST_BID_TIMER = 5;
+let timeLeft = 3;
+const INITIAL_TIMER = 3;
+const POST_BID_TIMER = 3;
 const STARTING_BUDGET = 500;
 const MAX_SQUAD_SIZE = 5;
+const POSITION_GROUPS = {
+    GK: "GK", CB: "DEF", LB: "DEF", RB: "DEF", LWB: "DEF", RWB: "DEF",
+    CDM: "MID", CM: "MID", CAM: "MID", LM: "MID", RM: "MID",
+    LW: "ATT", RW: "ATT", ST: "ATT"
+};
 
 // Tactics & Simulation State
 let tacticsTimerInterval;
@@ -202,6 +207,7 @@ function syncGameState(state) {
         document.getElementById('player-dribbling').innerText = `DRI: ${state.card.dribbling}`;
         document.getElementById('player-defence').innerText = `DEF: ${state.card.defence}`;
         document.getElementById('player-physical').innerText = `PHY: ${state.card.physical}`;
+        document.getElementById('player-overall').innerText = `OVR: ${state.card.overall}`;
     }
 
     currentBid = state.bid;
@@ -218,10 +224,13 @@ function syncGameState(state) {
     const teamsList = document.getElementById('teams-list');
     teamsList.innerHTML = "";
     for (const [name, data] of Object.entries(state.rosters)) {
-        let playersHtml = data.squad.map(p => `<li>${p}</li>`).join('');
+        let playersHtml = data.squad.map(p => {
+            const player = playersData.find(item => item.name === p);
+            return `<li>${p}${player ? ` <span class="squad-ovr">${player.overall} OVR</span>` : ''}</li>`;
+        }).join('');
         teamsList.innerHTML += `
             <div class="team-block">
-                <h4>${name} <span>£${data.money}M</span></h4>
+                <h4>${name} <span>${data.squad.length}/${MAX_SQUAD_SIZE} players · £${data.money}M</span></h4>
                 <ul>${playersHtml || "<li>No players yet</li>"}</ul>
             </div>
         `;
@@ -243,9 +252,11 @@ function initTacticsPhase(rosters) {
     let optionsHtml = positions.map(pos => `<option value="${pos}">${pos}</option>`).join('');
 
     mySquad.forEach(playerName => {
+        const player = playersData.find(item => item.name === playerName);
+        const preferred = player?.positions?.join(', ') || 'Any position';
         builderList.innerHTML += `
             <div class="builder-row">
-                <span>${playerName}</span>
+                <span>${playerName} <small>${player?.overall || 50} OVR · prefers ${preferred}</small></span>
                 <select class="pos-select" data-player="${playerName}">
                     <option value="" disabled selected>Select Position</option>
                     ${optionsHtml}
@@ -293,11 +304,13 @@ document.getElementById('lockTacticsBtn').addEventListener('click', () => {
 function autoSubmitTactics() {
     if (hasSubmittedTactics) return;
     const selects = document.querySelectorAll('.pos-select');
-    const availablePos = ["ST", "LW", "RW", "CAM", "CM", "CB", "LB", "RB", "GK", "CDM"];
+    const availablePos = ["GK", "CB", "LB", "RB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "ST"];
     
     selects.forEach((select, idx) => {
         if (!select.value) {
-            select.value = availablePos[idx % availablePos.length];
+            const player = playersData.find(item => item.name === select.dataset.player);
+            const preferred = (player?.positions || []).find(pos => !Array.from(selects).some(other => other !== select && other.value === pos));
+            select.value = preferred || availablePos.find(pos => !Array.from(selects).some(other => other !== select && other.value === pos)) || availablePos[idx];
         }
     });
     submitTactics();
@@ -368,27 +381,50 @@ function showLoadingScreen() {
 function calculateTeamMetrics(teamName, tacticsMap) {
     const squadNames = gameRosters[teamName] ? gameRosters[teamName].squad : ["Dummy1", "Dummy2", "Dummy3", "Dummy4", "Dummy5"];
     let totalPace = 0, totalShooting = 0, totalPassing = 0, totalDribbling = 0, totalDefence = 0, totalPhysical = 0;
-    let totalScaledRating = 0;
+    const squadSize = squadNames.length;
+    // A missing player is a real competitive disadvantage: shape, work rate and cover all suffer.
+    const squadFactor = 0.58 + (0.42 * Math.min(squadSize, MAX_SQUAD_SIZE) / MAX_SQUAD_SIZE);
     const playersInfo = [];
+    const assigned = squadNames.map(name => ({
+        name,
+        player: playersData.find(item => item.name === name) || { name, overall: 50, pace: 50, shooting: 50, passing: 50, dribbling: 50, defence: 50, physical: 50, positions: [], chemistryWith: [] },
+        pos: tacticsMap?.[name] || "CM"
+    }));
+    const groups = assigned.map(item => POSITION_GROUPS[item.pos]).filter(Boolean);
+    const has = group => groups.includes(group);
+    const structureScore = (has("GK") ? 0.25 : 0) + (has("DEF") ? 0.25 : 0) + (has("MID") ? 0.25 : 0) + (has("ATT") ? 0.25 : 0);
+    const formationBonus = squadSize >= 4 ? structureScore * 0.10 : structureScore * 0.04;
+    const chemistryPairs = assigned.reduce((total, item, index) => total + assigned.slice(index + 1).filter(other => item.player.chemistryWith?.includes(other.name) || other.player.chemistryWith?.includes(item.name)).length, 0);
+    const possiblePairs = Math.max(1, (squadSize * (squadSize - 1)) / 2);
+    const chemistryScore = chemistryPairs / possiblePairs;
+    const chemistryBonus = chemistryScore * 0.10;
+    const formation = `${groups.filter(group => group === "GK").length}-${groups.filter(group => group === "DEF").length}-${groups.filter(group => group === "MID").length}-${groups.filter(group => group === "ATT").length}`;
+    let totalAdjustedRating = 0;
 
-    squadNames.forEach(name => {
-        const p = playersData.find(item => item.name === name) || { pace:50, shooting:50, passing:50, dribbling:50, defence:50, physical:50, positions:[] };
-        const assignedPos = tacticsMap ? tacticsMap[name] : "CM";
-        
-        const isPreferred = p.positions && p.positions.includes(assignedPos);
-        const modifier = isPreferred ? 1.20 : 0.75;
+    assigned.forEach(({ name, player: p, pos: assignedPos }) => {
+        const isPreferred = p.positions?.includes(assignedPos);
+        const positionModifier = isPreferred ? 1 : (p.positions?.some(pos => POSITION_GROUPS[pos] === POSITION_GROUPS[assignedPos]) ? 0.92 : 0.78);
+        const adjustedModifier = positionModifier * squadFactor * (1 + formationBonus + chemistryBonus * 0.65);
 
-        totalPace += p.pace * modifier;
-        totalShooting += p.shooting * modifier;
-        totalPassing += p.passing * modifier;
-        totalDribbling += p.dribbling * modifier;
-        totalDefence += p.defence * modifier;
-        totalPhysical += p.physical * modifier;
+        totalPace += p.pace * adjustedModifier;
+        totalShooting += p.shooting * adjustedModifier;
+        totalPassing += p.passing * adjustedModifier;
+        totalDribbling += p.dribbling * adjustedModifier;
+        totalDefence += p.defence * adjustedModifier;
+        totalPhysical += p.physical * adjustedModifier;
 
-        const baseAvg = (p.pace + p.shooting + p.passing + p.dribbling + p.defence + p.physical) / 6;
-        totalScaledRating += baseAvg * modifier;
+        const baseOverall = p.overall ?? Math.round((p.pace + p.shooting + p.passing + p.dribbling + p.defence + p.physical) / 6);
+        const adjustedRating = Math.round(baseOverall * adjustedModifier);
+        totalAdjustedRating += adjustedRating;
 
-        playersInfo.push({ name: p.name, pos: assignedPos, rating: Math.round(baseAvg * modifier) });
+        playersInfo.push({
+            name,
+            pos: assignedPos,
+            baseOverall,
+            rating: adjustedRating,
+            positionFit: isPreferred ? "Natural" : "Out of position",
+            chemistryWith: p.chemistryWith || []
+        });
     });
 
     const count = squadNames.length || 5;
@@ -400,16 +436,19 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const avgPhysical = totalPhysical / count;
 
     // High variance calculation factors
-    const noise = () => (Math.random() * 0.4) + 0.8; // Random multiplier between 0.8 and 1.2
+    const noise = () => (Math.random() * 0.1) + 0.95; // Random multiplier between 0.95 and 1.05
     
-    const xG = parseFloat(((Math.pow(avgShooting / 15, 1.8) * 0.15 + Math.pow(avgPassing / 20, 1.4) * 0.1) * noise()).toFixed(2));
-    const rating = Math.round(totalScaledRating / count);
+    const attackQuality = (avgShooting * 0.55) + (avgDribbling * 0.20) + (avgPassing * 0.25);
+    const rating = Math.round((totalAdjustedRating / count) * (1 + formationBonus + chemistryBonus));
+    const xG = parseFloat(Math.max(0.12, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2));
     const controlPower = (avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5);
     const chances = Math.max(1, Math.round(((avgPassing * 0.25) + (avgDribbling * 0.2)) * noise()));
     const passes = Math.max(80, Math.round(((avgPassing * 7.5) + (avgPace * 2.0)) * noise()));
     const tackles = Math.max(5, Math.round(((avgDefence * 0.45) + (avgPhysical * 0.35)) * noise()));
 
-    return { rating, xG, chances, passes, tackles, controlPower, players: playersInfo };
+    const defensiveSecurity = avgDefence * (0.82 + (squadFactor * 0.18)) * (0.92 + (structureScore * 0.08));
+
+    return { rating, xG, chances, passes, tackles, controlPower, defensiveSecurity, players: playersInfo, squadSize, squadFactor, formationBonus, chemistryBonus, chemistryPairs, structureScore, formation };
 }
 
 function runMatchSimulationEngine() {
@@ -422,27 +461,41 @@ function runMatchSimulationEngine() {
 
     // Exact 100% Possession Distribution
     const totalControl = team1Stats.controlPower + team2Stats.controlPower;
-    team1Stats.possession = Math.min(78, Math.max(22, Math.round((team1Stats.controlPower / totalControl) * 100)));
+    team1Stats.possession = totalControl > 0
+        ? Math.min(78, Math.max(22, Math.round((team1Stats.controlPower / totalControl) * 100)))
+        : 50;
     team2Stats.possession = 100 - team1Stats.possession;
+
+    // --- FAIRNESS ALGORITHM ---
+    // Boost xG based on team OVR difference to ensure better teams create more chances
+    const ratingDiff = team1Stats.rating - team2Stats.rating;
+    if (ratingDiff > 5) {
+        team1Stats.xG = parseFloat((team1Stats.xG + (ratingDiff * 0.1)).toFixed(2));
+        team2Stats.xG = Math.max(0.1, parseFloat((team2Stats.xG - (ratingDiff * 0.05)).toFixed(2)));
+    } else if (ratingDiff < -5) {
+        team2Stats.xG = parseFloat((team2Stats.xG + (Math.abs(ratingDiff) * 0.1)).toFixed(2));
+        team1Stats.xG = Math.max(0.1, parseFloat((team1Stats.xG - (Math.abs(ratingDiff) * 0.05)).toFixed(2)));
+    }
+
+    team1Stats.xG = applyDefensivePressureToXg(team1Stats.xG, team2Stats.defensiveSecurity);
+    team2Stats.xG = applyDefensivePressureToXg(team2Stats.xG, team1Stats.defensiveSecurity);
+
+    // --- PLAYER FORM ---
+    let allPlayers = [...team1Stats.players, ...team2Stats.players];
+
+    allPlayers.forEach(p => {
+        // Random performance form: Swings between -8 and +12 OVR
+        const formSwing = Math.floor(Math.random() * 21) - 8; 
+        p.matchRating = p.rating + formSwing;
+        p.formSwing = formSwing;
+        p.goals = 0;
+        p.assists = 0;
+        p.motmScore = p.matchRating;
+    });
 
     // Goals Simulation
     let team1Goals = simulateGoals(team1Stats.xG);
     let team2Goals = simulateGoals(team2Stats.xG);
-
-    // Reduce draws unless stats are closely matched
-    const xgDiff = Math.abs(team1Stats.xG - team2Stats.xG);
-    const ratingDiff = Math.abs(team1Stats.rating - team2Stats.rating);
-
-    if (team1Goals === team2Goals && (xgDiff >= 0.25 || ratingDiff >= 3)) {
-        // 80% chance dominant team scores late decisive goal
-        if (Math.random() < 0.80) {
-            if (team1Stats.xG > team2Stats.xG) {
-                team1Goals++;
-            } else if (team2Stats.xG > team1Stats.xG) {
-                team2Goals++;
-            }
-        }
-    }
 
     // Generate Scorer Events
     const goalEvents = [];
@@ -452,12 +505,21 @@ function runMatchSimulationEngine() {
     generateGoalEvents(team2Name, team2Goals, team2Stats.players, goalEvents, shotTypes);
 
     goalEvents.sort((a, b) => a.minute - b.minute);
+    const motm = determineManOfTheMatch({
+        team1Name,
+        team2Name,
+        team1Goals,
+        team2Goals,
+        team1Stats,
+        team2Stats
+    });
 
     return {
         team1Name, team2Name,
         team1Goals, team2Goals,
         team1Stats, team2Stats,
-        goalEvents
+        goalEvents,
+        motm
     };
 }
 
@@ -476,17 +538,103 @@ function simulateGoals(xg) {
 }
 
 function generateGoalEvents(teamName, goalCount, players, goalEvents, shotTypes) {
+    if (!players.length) return;
+    const weightedPlayers = players.map(player => ({
+        player,
+        weight: Math.max(1, player.rating * (POSITION_GROUPS[player.pos] === "ATT" ? 1.45 : POSITION_GROUPS[player.pos] === "MID" ? 0.9 : 0.35))
+    }));
+    const totalWeight = weightedPlayers.reduce((sum, item) => sum + item.weight, 0);
     for (let i = 0; i < goalCount; i++) {
         const minute = Math.floor(Math.random() * 88) + 2;
-        const randomPlayer = players[Math.floor(Math.random() * players.length)].name;
+        let roll = Math.random() * totalWeight;
+        let selected = weightedPlayers[weightedPlayers.length - 1].player;
+        for (const item of weightedPlayers) {
+            roll -= item.weight;
+            if (roll <= 0) {
+                selected = item.player;
+                break;
+            }
+        }
+        selected.goals += 1;
+        const assister = selectAssister(players, selected);
+        if (assister) assister.assists += 1;
+
         const randomShot = shotTypes[Math.floor(Math.random() * shotTypes.length)];
         goalEvents.push({
             minute,
             team: teamName,
-            scorer: randomPlayer,
+            scorer: selected.name,
+            assist: assister?.name || null,
             type: randomShot
         });
     }
+}
+
+function applyDefensivePressureToXg(xg, opponentDefensiveSecurity) {
+    const defensiveGap = 70 - opponentDefensiveSecurity;
+    const concessionModifier = Math.min(1.35, Math.max(0.82, 1 + (defensiveGap / 140)));
+    return parseFloat(Math.max(0.1, xg * concessionModifier).toFixed(2));
+}
+
+function selectAssister(players, scorer) {
+    const candidates = players.filter(player => player.name !== scorer.name);
+    if (!candidates.length || Math.random() < 0.18) return null;
+
+    const weightedPlayers = candidates.map(player => ({
+        player,
+        weight: Math.max(1, player.rating * (POSITION_GROUPS[player.pos] === "MID" ? 1.3 : POSITION_GROUPS[player.pos] === "ATT" ? 1.05 : 0.45) * (hasChemistry(player, scorer) ? 1.65 : 1))
+    }));
+    const totalWeight = weightedPlayers.reduce((sum, item) => sum + item.weight, 0);
+    let roll = Math.random() * totalWeight;
+
+    for (const item of weightedPlayers) {
+        roll -= item.weight;
+        if (roll <= 0) return item.player;
+    }
+
+    return weightedPlayers[weightedPlayers.length - 1].player;
+}
+
+function hasChemistry(player, teammate) {
+    return player.chemistryWith?.includes(teammate.name) || teammate.chemistryWith?.includes(player.name);
+}
+
+function determineManOfTheMatch({ team1Name, team2Name, team1Goals, team2Goals, team1Stats, team2Stats }) {
+    const allPlayers = [
+        ...team1Stats.players.map(player => ({ player, teamName: team1Name, teamGoals: team1Goals, goalsAgainst: team2Goals })),
+        ...team2Stats.players.map(player => ({ player, teamName: team2Name, teamGoals: team2Goals, goalsAgainst: team1Goals }))
+    ];
+
+    let motm = null;
+    let highestScore = -Infinity;
+
+    allPlayers.forEach(({ player, teamName, teamGoals, goalsAgainst }) => {
+        const group = POSITION_GROUPS[player.pos];
+        const resultBonus = teamGoals > goalsAgainst ? 3 : (teamGoals === goalsAgainst ? 1 : 0);
+        const goalBonus = player.goals * (group === "ATT" ? 9 : group === "MID" ? 10 : 12);
+        const assistBonus = player.assists * 5;
+        const defensiveBonus = (group === "GK" || group === "DEF")
+            ? Math.max(0, 7 - (goalsAgainst * 3))
+            : Math.max(0, 2 - goalsAgainst);
+        const midfieldBonus = group === "MID" ? Math.min(4, Math.round(player.rating / 25)) : 0;
+
+        player.motmScore = Math.round(player.matchRating + goalBonus + assistBonus + defensiveBonus + midfieldBonus + resultBonus);
+        player.finalOverall = player.motmScore;
+
+        if (player.motmScore > highestScore) {
+            highestScore = player.motmScore;
+            motm = {
+                name: player.name,
+                rating: player.finalOverall,
+                score: player.motmScore,
+                team: teamName,
+                goals: player.goals,
+                assists: player.assists
+            };
+        }
+    });
+
+    return motm;
 }
 
 // --- 10. RENDER FINAL MATCH RESULTS ---
@@ -494,8 +642,15 @@ function renderMatchResults(payload) {
     document.getElementById('loading-phase').style.display = 'none';
     document.getElementById('match-results-phase').style.display = 'block';
 
-    document.getElementById('scoreboard-header').innerText = 
-        `${payload.team1Name} ${payload.team1Goals} - ${payload.team2Goals} ${payload.team2Name}`;
+    document.getElementById('scoreboard-header').innerHTML = `
+        ${payload.team1Name} ${payload.team1Goals} - ${payload.team2Goals} ${payload.team2Name}
+        <div style="color: #ffd166; font-size: 1.1rem; margin-top: 15px; text-transform: uppercase;">
+            ⭐ Man of the Match: <strong>${payload.motm.name} (${payload.motm.team})</strong>
+            <span style="display:block; font-size:0.78rem; color:#cbd5e1; margin-top:4px;">
+                ${payload.motm.rating} final OVR · ${payload.motm.goals}G ${payload.motm.assists}A
+            </span>
+        </div>
+    `;
 
     const goalContainer = document.getElementById('goalscorers-list');
     goalContainer.innerHTML = "";
@@ -506,40 +661,56 @@ function renderMatchResults(payload) {
         payload.goalEvents.forEach(evt => {
             goalContainer.innerHTML += `
                 <div class="goal-item">
-                    ⚽ <strong>${evt.minute}'</strong> ${evt.scorer} (${evt.team}) - <em>${evt.type}</em>
+                    ⚽ <strong>${evt.minute}'</strong> ${evt.scorer} (${evt.team})${evt.assist ? `, assist ${evt.assist}` : ''} - <em>${evt.type}</em>
                 </div>
             `;
         });
     }
 
-    const renderSquadHtml = (players) => {
-        return players.map(p => `<li>${p.name} <strong>(${p.pos})</strong> - ${p.rating} OVR</li>`).join('');
+    const renderSquadHtml = (players, motm) => {
+        return players.map(p => {
+            // Determine colors and + / - signs for the UI
+            const sign = p.formSwing > 0 ? '+' : '';
+            const color = p.formSwing > 0 ? '#4ade80' : (p.formSwing < 0 ? '#f87171' : '#cbd5e1');
+            const motmBadge = p.name === motm.name ? '<span style="color:#ffd166; font-size:0.82em; margin-left: 5px;">MOTM</span>' : '';
+            
+            return `<li>
+                ${p.name} <strong>(${p.pos})</strong> - ${p.finalOverall} OVR 
+                <span style="color:${color}; font-size:0.85em; margin-left: 5px;">(${sign}${p.formSwing})</span>
+                <span style="color:#94a3b8; font-size:0.82em; margin-left: 5px;">${p.goals}G ${p.assists}A</span>
+                ${motmBadge}
+            </li>`;
+        }).join('');
     };
 
     // Render Team 1 Stats & Squad
     document.getElementById('team1-stats-col').innerHTML = `
         <h3>${payload.team1Name}</h3>
         <div>Rating: <strong>${payload.team1Stats.rating} OVR</strong></div>
+        <div>Squad: <strong>${payload.team1Stats.squadSize}/${MAX_SQUAD_SIZE}</strong> · Formation: <strong>${payload.team1Stats.formation}</strong></div>
+        <div>Chemistry links: <strong>${payload.team1Stats.chemistryPairs}</strong> · Structure: <strong>${Math.round(payload.team1Stats.structureScore * 100)}%</strong></div>
         <div>Possession: <strong>${payload.team1Stats.possession}%</strong></div>
         <div>xG: <strong>${payload.team1Stats.xG}</strong></div>
         <div>Chances: <strong>${payload.team1Stats.chances}</strong></div>
         <div>Passes: <strong>${payload.team1Stats.passes}</strong></div>
         <div>Tackles: <strong>${payload.team1Stats.tackles}</strong></div>
         <h4 style="margin-top:12px; color:#4cc9f0; border-top:1px solid #334155; padding-top:6px;">Squad</h4>
-        <ul style="list-style:none; font-size:0.85rem; color:#cbd5e1;">${renderSquadHtml(payload.team1Stats.players)}</ul>
+        <ul style="list-style:none; font-size:0.85rem; color:#cbd5e1;">${renderSquadHtml(payload.team1Stats.players, payload.motm)}</ul>
     `;
 
     // Render Team 2 Stats & Squad
     document.getElementById('team2-stats-col').innerHTML = `
         <h3>${payload.team2Name}</h3>
         <div>Rating: <strong>${payload.team2Stats.rating} OVR</strong></div>
+        <div>Squad: <strong>${payload.team2Stats.squadSize}/${MAX_SQUAD_SIZE}</strong> · Formation: <strong>${payload.team2Stats.formation}</strong></div>
+        <div>Chemistry links: <strong>${payload.team2Stats.chemistryPairs}</strong> · Structure: <strong>${Math.round(payload.team2Stats.structureScore * 100)}%</strong></div>
         <div>Possession: <strong>${payload.team2Stats.possession}%</strong></div>
         <div>xG: <strong>${payload.team2Stats.xG}</strong></div>
         <div>Chances: <strong>${payload.team2Stats.chances}</strong></div>
         <div>Passes: <strong>${payload.team2Stats.passes}</strong></div>
         <div>Tackles: <strong>${payload.team2Stats.tackles}</strong></div>
         <h4 style="margin-top:12px; color:#4cc9f0; border-top:1px solid #334155; padding-top:6px;">Squad</h4>
-        <ul style="list-style:none; font-size:0.85rem; color:#cbd5e1;">${renderSquadHtml(payload.team2Stats.players)}</ul>
+        <ul style="list-style:none; font-size:0.85rem; color:#cbd5e1;">${renderSquadHtml(payload.team2Stats.players, payload.motm)}</ul>
     `;
 }
 
