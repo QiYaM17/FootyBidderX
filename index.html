@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Footy Bidder X - Multiplayer</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+    <div id="alert-box" class="alert-box">Not enough funds!</div>
+
+    <!-- MAIN MENU -->
+    <div id="menu-screen" class="container">
+        <h1>Footy Bidder X</h1>
+        <p class="subtitle">Build the ultimate squad</p>
+
+        <div class="input-group">
+            <label for="username">Display Name</label>
+            <input type="text" id="username" placeholder="Enter Name" autocomplete="off">
+        </div>
+
+        <div class="actions">
+            <button id="createBtn" class="btn btn-primary">Create Lobby</button>
+            <button id="joinBtn" class="btn btn-secondary">Join Lobby</button>
+        </div>
+
+        <div id="createPanel" class="panel">
+            <p>Your Lobby Code:</p>
+            <div id="lobbyCode" class="code-display">-----</div>
+            <p id="player-count">Players in lobby: 1</p>
+            <button id="startGameBtn" class="btn btn-primary" style="display: none; margin: 15px auto 0 auto;">Start Game</button>
+        </div>
+
+        <div id="joinPanel" class="panel">
+            <div class="input-group">
+                <label for="joinCode">5-Digit Code</label>
+                <input type="text" id="joinCode" placeholder="e.g. 84920" maxlength="5" autocomplete="off" style="text-align: center; font-size: 1.2rem; letter-spacing: 3px;">
+            </div>
+            <button id="connectBtn" class="btn btn-primary">Join Game</button>
+            <p id="join-status" style="margin-top: 10px; color: #94a3b8;"></p>
+        </div>
+    </div>
+
+    <!-- GAME SCREEN -->
+    <div id="game-screen" class="game-layout" style="display: none;">
+        <div class="bidding-area">
+            <div class="header-info">
+                <h2>My Budget: £<span id="my-budget">500</span>M</h2>
+                <h2 id="timer-display" class="timer">Time Left: 7s</h2>
+            </div>
+            
+            <div class="player-card">
+                <img src="" id="player-icon" alt="Player Photo" style="width: 150px; border-radius: 8px;" onerror="this.onerror=null; this.src='https://placehold.co/150x200/1e293b/4cc9f0?text=No+Photo';">
+                <div class="player-stats">
+                    <div class="stat-name" id="player-name">Name: -</div>
+                    <div class="player-stat" id="player-pace">PAC: -</div>
+                    <div class="player-stat" id="player-shooting">SHO: -</div>
+                    <div class="player-stat" id="player-passing">PAS: -</div>
+                    <div class="player-stat" id="player-dribbling">DRI: -</div>
+                    <div class="player-stat" id="player-defence">DEF: -</div>
+                    <div class="player-stat" id="player-physical">PHY: -</div>
+                </div>
+            </div>
+
+            <div class="bid-info">
+                <h3>Current Bid: £<span id="current-bid">0</span>M</h3>
+                <p id="highest-bidder">Highest Bidder: None</p>
+            </div>
+
+            <div class="actions">
+                <button id="bid1mil" class="btn btn-primary">+£1M</button>
+                <button id="bid5mil" class="btn btn-primary">+£5M</button>
+                <button id="bid10mil" class="btn btn-primary">+£10M</button>
+                <button id="bid25mil" class="btn btn-primary">+£25M</button>
+            </div>
+        </div>
+
+        <div class="teams-sidebar">
+            <h3>Squads</h3>
+            <div id="teams-list"></div>
+        </div>
+    </div>
+
+    <!-- END GAME & MATCH SIMULATION SCREEN -->
+    <div id="end-screen" class="game-layout" style="display: none;">
+        
+        <!-- Phase 1: Tactics Selection -->
+        <div id="tactics-phase" class="bidding-area" style="width: 100%;">
+            <h1>Set Your Lineup</h1>
+            <h2 id="tactics-timer" class="timer" style="margin: 10px 0;">Tactics Time: 15s</h2>
+            <p class="subtitle">Assign unique positions to your 5 players before time runs out!</p>
+            
+            <div id="team-builder-list" style="text-align: left; margin-bottom: 20px;"></div>
+            <button id="lockTacticsBtn" class="btn btn-primary">Lock In Tactics</button>
+        </div>
+
+        <!-- Phase 2: Live Match Loading Screen -->
+        <div id="loading-phase" class="bidding-area" style="display: none; width: 100%; text-align: center;">
+            <h1 style="color: #ffd166;">LIVE MATCH IN PROGRESS</h1>
+            <div class="spinner"></div>
+            <h2 id="loading-countdown" style="margin-top: 20px; font-size: 2rem; color: #4cc9f0;">Simulating Match... 10s</h2>
+            <p class="subtitle">Calculating player statistics, tactical bonuses, and match events...</p>
+        </div>
+
+        <!-- Phase 3: Live Scoreboard & Final Stats -->
+        <div id="match-results-phase" class="bidding-area" style="display: none; width: 100%;">
+            <h1 style="color: #4cc9f0;">FINAL MATCH RESULT</h1>
+            
+            <div class="scoreboard-card">
+                <div id="scoreboard-header" class="score-display-main">Team A 0 - 0 Team B</div>
+                <div id="goalscorers-list" class="goalscorers-container"></div>
+            </div>
+
+            <div class="stats-comparison-grid">
+                <div id="team1-stats-col" class="stat-col"></div>
+                <div id="team2-stats-col" class="stat-col"></div>
+            </div>
+
+            <button class="btn btn-secondary" onclick="location.reload()" style="margin-top: 25px; width: 100%;">Return to Main Menu</button>
+        </div>
+    </div>
+
+    <script src="players.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
