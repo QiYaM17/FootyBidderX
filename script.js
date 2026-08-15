@@ -2,8 +2,10 @@
 let peer = null;
 let connectionToHost = null;
 let hostConnections = []; 
+let connectionOwners = new Map();
 let isHost = false;
 let myName = "";
+let matchHasStarted = false;
 
 // Host-managed state
 let availablePlayers = [...playersData];
@@ -17,6 +19,11 @@ const INITIAL_TIMER = 3;
 const POST_BID_TIMER = 3;
 const STARTING_BUDGET = 500;
 const MAX_SQUAD_SIZE = 5;
+const MAX_LOBBY_PLAYERS = 3;
+const TRANSFER_DURATION = 25;
+const TEAM_COLOURS = ["#4cc9f0", "#f72585", "#ffd166"];
+const MAX_MATCH_OVR = 110;
+const MAX_PLAYER_MATCH_OVR = 110;
 const POSITION_GROUPS = {
     GK: "GK", CB: "DEF", LB: "DEF", RB: "DEF", LWB: "DEF", RWB: "DEF",
     CDM: "MID", CM: "MID", CAM: "MID", LM: "MID", RM: "MID",
@@ -28,12 +35,25 @@ let tacticsTimerInterval;
 let tacticsTimeLeft = 15;
 let lockedTactics = {};
 let hasSubmittedTactics = false;
+let transferTimerInterval;
+let transferTimeLeft = TRANSFER_DURATION;
+let transferPhaseActive = false;
+let pendingTradeOffers = [];
+let tournamentFixtures = [];
+let tournamentResults = [];
+let selectedTournamentMatchIndex = 0;
+let liveCommentaryInterval;
 
 // --- 2. DOM ELEMENTS ---
 const menuScreen = document.getElementById('menu-screen');
 const gameScreen = document.getElementById('game-screen');
 const endScreen = document.getElementById('end-screen');
 const usernameInput = document.getElementById('username');
+const teamColourInput = document.getElementById('team-colour');
+
+teamColourInput.addEventListener('input', () => {
+    document.getElementById('team-colour-value').innerText = teamColourInput.value.toUpperCase();
+});
 
 // --- 3. MENU LOGIC & VALIDATION ---
 document.getElementById('createBtn').addEventListener('click', () => {
@@ -63,7 +83,7 @@ function setupHost() {
     const randomCode = Math.floor(10000 + Math.random() * 90000).toString();
     document.getElementById('lobbyCode').innerText = randomCode;
     
-    gameRosters[myName] = { money: STARTING_BUDGET, squad: [] };
+    gameRosters[myName] = { money: STARTING_BUDGET, squad: [], teamColour: getAvailableTeamColour(teamColourInput.value) };
 
     peer = new Peer("footy-" + randomCode); 
     peer.on('open', () => {
@@ -71,22 +91,75 @@ function setupHost() {
     });
 
     peer.on('connection', (conn) => {
+        if (hostConnections.length >= MAX_LOBBY_PLAYERS - 1 || Object.keys(gameRosters).length >= MAX_LOBBY_PLAYERS) {
+            rejectLobbyConnection(conn, 'This lobby already has the maximum of 3 players.');
+            return;
+        }
         hostConnections.push(conn);
-        document.getElementById('player-count').innerText = `Players in lobby: ${hostConnections.length + 1}`;
+        document.getElementById('player-count').innerText = `Players in lobby: ${Object.keys(gameRosters).length}/${MAX_LOBBY_PLAYERS}`;
+
+        conn.on('close', () => {
+            const connectionIndex = hostConnections.indexOf(conn);
+            if (connectionIndex >= 0) hostConnections.splice(connectionIndex, 1);
+            const disconnectedName = connectionOwners.get(conn);
+            if (disconnectedName && !matchHasStarted) {
+                delete gameRosters[disconnectedName];
+                connectionOwners.delete(conn);
+                document.getElementById('player-count').innerText = `Players in lobby: ${Object.keys(gameRosters).length}/${MAX_LOBBY_PLAYERS}`;
+            }
+        });
         
         conn.on('data', (data) => {
             if (data.type === 'JOIN') {
-                gameRosters[data.name] = { money: STARTING_BUDGET, squad: [] };
+                if (!data.name || gameRosters[data.name] || Object.keys(gameRosters).length >= MAX_LOBBY_PLAYERS || matchHasStarted) {
+                    const message = gameRosters[data.name]
+                        ? 'That display name is already in use.'
+                        : matchHasStarted
+                            ? 'The game has already started. Please join a new lobby.'
+                            : 'This lobby already has the maximum of 3 players.';
+                    rejectLobbyConnection(conn, message, 'JOIN_REJECTED');
+                    return;
+                }
+                gameRosters[data.name] = {
+                    money: STARTING_BUDGET,
+                    squad: [],
+                    teamColour: getAvailableTeamColour(data.teamColour)
+                };
+                connectionOwners.set(conn, data.name);
+                document.getElementById('player-count').innerText = `Players in lobby: ${Object.keys(gameRosters).length}/${MAX_LOBBY_PLAYERS}`;
             } else if (data.type === 'BID') {
-                processBid(data.amount, data.playerName);
+                const senderName = connectionOwners.get(conn);
+                processBid(data.amount, senderName);
             } else if (data.type === 'SUBMIT_TACTICS') {
-                handleClientTactics(data.name, data.tactics);
+                handleClientTactics(connectionOwners.get(conn), data.tactics);
+            } else if (data.type === 'SELL_PLAYER') {
+                sellPlayerToMarket(connectionOwners.get(conn), data.playerName);
+            } else if (data.type === 'OFFER_TRADE') {
+                createTradeOffer({ ...data, name: connectionOwners.get(conn) });
+            } else if (data.type === 'RESPOND_TRADE') {
+                respondToTrade(connectionOwners.get(conn), data.offerId, data.accepted);
+            } else if (data.type === 'READY_FOR_TACTICS') {
+                markReadyForTactics(connectionOwners.get(conn));
             }
         });
     });
 }
 
+function rejectLobbyConnection(conn, message, type = 'LOBBY_FULL') {
+    const sendRejection = () => {
+        if (conn.open) conn.send({ type, message });
+        setTimeout(() => conn.close(), 100);
+    };
+    if (conn.open) sendRejection();
+    else conn.on('open', sendRejection);
+}
+
 document.getElementById('startGameBtn').addEventListener('click', () => {
+    if (Object.keys(gameRosters).length < 2) {
+        showCustomAlert('At least two players must join before the game can start.');
+        return;
+    }
+    matchHasStarted = true;
     startNextRound();
 });
 
@@ -104,7 +177,7 @@ document.getElementById('connectBtn').addEventListener('click', () => {
         connectionToHost = peer.connect("footy-" + code);
         connectionToHost.on('open', () => {
             document.getElementById('join-status').innerText = "Connected! Waiting for host...";
-            connectionToHost.send({ type: 'JOIN', name: myName });
+            connectionToHost.send({ type: 'JOIN', name: myName, teamColour: teamColourInput.value });
         });
 
         connectionToHost.on('data', (data) => {
@@ -112,10 +185,20 @@ document.getElementById('connectBtn').addEventListener('click', () => {
                 syncGameState(data.state);
             } else if (data.type === 'START_TACTICS') {
                 initTacticsPhase(data.rosters);
-            } else if (data.type === 'START_LOADING') {
-                showLoadingScreen();
-            } else if (data.type === 'SHOW_MATCH_RESULTS') {
+            } else if (data.type === 'START_TRANSFER') {
+                initTransferPhase(data.rosters, data.timeLeft);
+            } else if (data.type === 'TRANSFER_STATE') {
+                syncTransferState(data.state);
+            } else if (data.type === 'START_MATCH') {
+                showLoadingScreen(data.fixture, data.fixtureIndex, data.totalFixtures);
+            } else if (data.type === 'COMMENTARY_EVENT') {
+                appendCommentaryEvent(data.event);
+            } else if (data.type === 'MATCH_FINISHED') {
+                updateTournamentView(data.results, data.currentMatch);
+            } else if (data.type === 'SHOW_TOURNAMENT_RESULTS') {
                 renderMatchResults(data.payload);
+            } else if (data.type === 'LOBBY_FULL' || data.type === 'JOIN_REJECTED') {
+                document.getElementById('join-status').innerText = data.message || 'This lobby already has the maximum of 3 players.';
             }
         });
     });
@@ -177,8 +260,17 @@ function checkEndGameCondition() {
 
 function endGame() {
     clearInterval(bidTimerInterval);
-    hostConnections.forEach(conn => conn.send({ type: 'START_TACTICS', rosters: gameRosters }));
-    initTacticsPhase(gameRosters);
+    startTransferPhase();
+}
+
+function getAvailableTeamColour(preferredColour) {
+    const usedColours = Object.values(gameRosters).map(roster => roster.teamColour?.toLowerCase());
+    if (preferredColour && !usedColours.includes(preferredColour.toLowerCase())) return preferredColour;
+    return TEAM_COLOURS.find(colour => !usedColours.includes(colour.toLowerCase())) || TEAM_COLOURS[0];
+}
+
+function clampOverall(value, maximum = MAX_MATCH_OVR) {
+    return Math.min(maximum, Math.max(1, Math.round(value)));
 }
 
 function broadcastState() {
@@ -229,20 +321,180 @@ function syncGameState(state) {
             return `<li>${p}${player ? ` <span class="squad-ovr">${player.overall} OVR</span>` : ''}</li>`;
         }).join('');
         teamsList.innerHTML += `
-            <div class="team-block">
-                <h4>${name} <span>${data.squad.length}/${MAX_SQUAD_SIZE} players · £${data.money}M</span></h4>
+            <div class="team-block" style="border-left: 4px solid ${data.teamColour || '#4cc9f0'};">
+                <h4><span><i class="team-colour-dot" style="background:${data.teamColour || '#4cc9f0'}"></i>${name}</span> <span>${data.squad.length}/${MAX_SQUAD_SIZE} players · £${data.money}M</span></h4>
                 <ul>${playersHtml || "<li>No players yet</li>"}</ul>
             </div>
         `;
     }
 }
 
+// --- 8. TRANSFER MARKET ---
+function startTransferPhase() {
+    transferPhaseActive = true;
+    transferTimeLeft = TRANSFER_DURATION;
+    pendingTradeOffers = [];
+    Object.values(gameRosters).forEach(roster => { roster.readyForTactics = false; });
+    broadcastTransferState('START_TRANSFER');
+    startTransferTimer();
+}
+
+function startTransferTimer() {
+    clearInterval(transferTimerInterval);
+    transferTimerInterval = setInterval(() => {
+        transferTimeLeft--;
+        broadcastTransferState('TRANSFER_STATE');
+        if (transferTimeLeft <= 0) {
+            clearInterval(transferTimerInterval);
+            beginTacticsPhase();
+        }
+    }, 1000);
+}
+
+function getTransferState() {
+    return { rosters: gameRosters, offers: pendingTradeOffers, timeLeft: transferTimeLeft };
+}
+
+function broadcastTransferState(type) {
+    const state = getTransferState();
+    if (type === 'START_TRANSFER') {
+        hostConnections.forEach(conn => conn.send({ type, rosters: gameRosters, timeLeft: transferTimeLeft }));
+        initTransferPhase(gameRosters, transferTimeLeft);
+    } else {
+        hostConnections.forEach(conn => conn.send({ type, state }));
+        syncTransferState(state);
+    }
+}
+
+function initTransferPhase(rosters, timeLeft = TRANSFER_DURATION) {
+    transferPhaseActive = true;
+    gameRosters = rosters;
+    transferTimeLeft = timeLeft;
+    gameScreen.style.display = 'none';
+    endScreen.style.display = 'flex';
+    document.getElementById('transfer-phase').style.display = 'block';
+    document.getElementById('tactics-phase').style.display = 'none';
+    document.getElementById('loading-phase').style.display = 'none';
+    document.getElementById('match-results-phase').style.display = 'none';
+    renderTransferMarket();
+}
+
+function syncTransferState(state) {
+    gameRosters = state.rosters;
+    pendingTradeOffers = state.offers;
+    transferTimeLeft = state.timeLeft;
+    if (document.getElementById('transfer-phase').style.display !== 'none') renderTransferMarket();
+}
+
+function renderTransferMarket() {
+    const myRoster = gameRosters[myName] || { squad: [] };
+    document.getElementById('transfer-timer').innerText = `Market closes in: ${Math.max(0, transferTimeLeft)}s`;
+    document.getElementById('transfer-rosters').innerHTML = Object.entries(gameRosters).map(([name, roster]) => {
+        const squad = roster.squad.map(playerName => {
+            const player = playersData.find(item => item.name === playerName);
+            return `<li>${playerName} <span class="squad-ovr">${player?.overall || 50} OVR</span></li>`;
+        }).join('') || '<li>No players</li>';
+        return `<div class="market-team" style="--team-colour:${roster.teamColour || '#4cc9f0'}"><h3><i class="team-colour-dot" style="background:${roster.teamColour || '#4cc9f0'}"></i>${name}</h3><p>£${roster.money}M</p><ul>${squad}</ul></div>`;
+    }).join('');
+
+    const ownOptions = myRoster.squad.map(name => `<option value="${name}">${name}</option>`).join('') || '<option value="">No players available</option>';
+    document.getElementById('sell-player-select').innerHTML = ownOptions;
+    document.getElementById('trade-my-player-select').innerHTML = ownOptions;
+
+    const otherTeams = Object.keys(gameRosters).filter(name => name !== myName);
+    const teamSelect = document.getElementById('trade-team-select');
+    teamSelect.innerHTML = otherTeams.map(name => `<option value="${name}">${name}</option>`).join('') || '<option value="">No other team</option>';
+    updateTradeTargetOptions();
+
+    const offerArea = document.getElementById('trade-offers');
+    const relevantOffers = pendingTradeOffers.filter(offer => offer.to === myName);
+    offerArea.innerHTML = relevantOffers.length
+        ? relevantOffers.map(offer => `<div class="trade-offer"><span><strong>${offer.from}</strong> offers ${offer.theirPlayer} for your ${offer.myPlayer}.</span><button class="btn btn-primary" onclick="respondToTradeOffer('${offer.id}', true)">Accept</button><button class="btn btn-secondary" onclick="respondToTradeOffer('${offer.id}', false)">Decline</button></div>`).join('')
+        : '<p class="subtitle" style="margin: 0;">No trade offers waiting.</p>';
+
+    const locked = transferTimeLeft <= 0 || !myRoster.squad.length;
+    document.getElementById('sell-player-btn').disabled = locked;
+    document.getElementById('offer-trade-btn').disabled = locked || !otherTeams.length;
+    document.getElementById('close-market-btn').innerText = myRoster.readyForTactics ? 'Ready for Tactics ✓' : 'Ready for Tactics';
+    document.getElementById('close-market-btn').disabled = Boolean(myRoster.readyForTactics);
+}
+
+function updateTradeTargetOptions() {
+    const targetTeam = document.getElementById('trade-team-select').value;
+    const targetRoster = gameRosters[targetTeam] || { squad: [] };
+    document.getElementById('trade-their-player-select').innerHTML = targetRoster.squad.map(name => `<option value="${name}">${name}</option>`).join('') || '<option value="">No players available</option>';
+}
+
+function sellPlayerToMarket(ownerName, playerName) {
+    if (!transferPhaseActive) return;
+    const roster = gameRosters[ownerName];
+    const player = playersData.find(item => item.name === playerName);
+    if (!roster || !player || !roster.squad.includes(playerName)) return;
+    roster.squad = roster.squad.filter(name => name !== playerName);
+    roster.money += Math.floor(player.basePrice * 0.5);
+    availablePlayers.push(player);
+    pendingTradeOffers = pendingTradeOffers.filter(offer => offer.from !== ownerName && offer.to !== ownerName);
+    broadcastTransferState('TRANSFER_STATE');
+}
+
+function createTradeOffer({ name, targetTeam, myPlayer, theirPlayer }) {
+    if (!transferPhaseActive) return;
+    const owner = gameRosters[name];
+    const target = gameRosters[targetTeam];
+    if (!owner || !target || name === targetTeam || !owner.squad.includes(myPlayer) || !target.squad.includes(theirPlayer)) return;
+    pendingTradeOffers.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, from: name, to: targetTeam, theirPlayer: myPlayer, myPlayer: theirPlayer });
+    broadcastTransferState('TRANSFER_STATE');
+}
+
+function respondToTrade(ownerName, offerId, accepted) {
+    if (!transferPhaseActive) return;
+    const offerIndex = pendingTradeOffers.findIndex(offer => offer.id === offerId && offer.to === ownerName);
+    if (offerIndex < 0) return;
+    const offer = pendingTradeOffers[offerIndex];
+    const from = gameRosters[offer.from];
+    const to = gameRosters[offer.to];
+    if (accepted && from?.squad.includes(offer.theirPlayer) && to?.squad.includes(offer.myPlayer)) {
+        from.squad[from.squad.indexOf(offer.theirPlayer)] = offer.myPlayer;
+        to.squad[to.squad.indexOf(offer.myPlayer)] = offer.theirPlayer;
+    }
+    pendingTradeOffers.splice(offerIndex, 1);
+    broadcastTransferState('TRANSFER_STATE');
+}
+
+function respondToTradeOffer(offerId, accepted) {
+    if (isHost) respondToTrade(myName, offerId, accepted);
+    else connectionToHost.send({ type: 'RESPOND_TRADE', name: myName, offerId, accepted });
+}
+
+function markReadyForTactics(playerName) {
+    if (!gameRosters[playerName]) return;
+    gameRosters[playerName].readyForTactics = true;
+    if (Object.values(gameRosters).every(roster => roster.readyForTactics)) {
+        clearInterval(transferTimerInterval);
+        beginTacticsPhase();
+    } else {
+        broadcastTransferState('TRANSFER_STATE');
+    }
+}
+
+function beginTacticsPhase() {
+    transferPhaseActive = false;
+    pendingTradeOffers = [];
+    hostConnections.forEach(conn => conn.send({ type: 'START_TACTICS', rosters: gameRosters }));
+    initTacticsPhase(gameRosters);
+}
+
 // --- 8. TACTICS PHASE ---
 function initTacticsPhase(rosters) {
     gameRosters = rosters;
+    lockedTactics = {};
+    hasSubmittedTactics = false;
     gameScreen.style.display = 'none';
     endScreen.style.display = 'flex';
+    document.getElementById('transfer-phase').style.display = 'none';
     document.getElementById('tactics-phase').style.display = 'block';
+    document.getElementById('lockTacticsBtn').disabled = false;
+    document.getElementById('lockTacticsBtn').innerText = 'Lock In Tactics';
 
     const mySquad = rosters[myName].squad;
     const builderList = document.getElementById('team-builder-list');
@@ -329,7 +581,7 @@ function submitTactics() {
     });
 
     if (!isComplete && tacticsTimeLeft > 0) {
-        showCustomAlert("Please assign all 5 positions!");
+        showCustomAlert(`Please assign all ${selects.length} positions!`);
         return;
     }
 
@@ -350,32 +602,71 @@ function handleClientTactics(playerName, tactics) {
     const totalPlayers = Object.keys(gameRosters).length;
 
     if (Object.keys(lockedTactics).length >= totalPlayers) {
-        executeMatchPipeline();
+        executeTournamentPipeline();
     }
 }
 
-function executeMatchPipeline() {
-    hostConnections.forEach(conn => conn.send({ type: 'START_LOADING' }));
-    showLoadingScreen();
-
-    const matchPayload = runMatchSimulationEngine();
-
-    setTimeout(() => {
-        hostConnections.forEach(conn => conn.send({ type: 'SHOW_MATCH_RESULTS', payload: matchPayload }));
-        renderMatchResults(matchPayload);
-    }, 10000);
+function executeTournamentPipeline() {
+    const teams = Object.keys(gameRosters);
+    tournamentFixtures = teams.flatMap((team, index) => teams.slice(index + 1).map(opponent => ({ team1Name: team, team2Name: opponent })));
+    tournamentResults = [];
+    runTournamentFixture(0);
 }
 
-function showLoadingScreen() {
+function runTournamentFixture(index) {
+    if (index >= tournamentFixtures.length) {
+        const lastMatch = tournamentResults[tournamentResults.length - 1];
+        const payload = { ...lastMatch, tournamentResults };
+        hostConnections.forEach(conn => conn.send({ type: 'SHOW_TOURNAMENT_RESULTS', payload }));
+        renderMatchResults(payload);
+        return;
+    }
+
+    const fixture = tournamentFixtures[index];
+    const matchPayload = runMatchSimulationEngine(fixture.team1Name, fixture.team2Name);
+    const timeline = buildMatchTimeline(matchPayload);
+    const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures: tournamentFixtures.length };
+    hostConnections.forEach(conn => conn.send(startMessage));
+    showLoadingScreen(fixture, index, tournamentFixtures.length);
+
+    let timelineIndex = 0;
+    clearInterval(liveCommentaryInterval);
+    liveCommentaryInterval = setInterval(() => {
+        const event = timeline[timelineIndex++];
+        if (event) {
+            hostConnections.forEach(conn => conn.send({ type: 'COMMENTARY_EVENT', event }));
+            appendCommentaryEvent(event);
+            return;
+        }
+
+        clearInterval(liveCommentaryInterval);
+        tournamentResults.push(matchPayload);
+        hostConnections.forEach(conn => conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }));
+        updateTournamentView(tournamentResults, matchPayload);
+        setTimeout(() => runTournamentFixture(index + 1), 1200);
+    }, 1000);
+}
+
+function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1) {
+    document.getElementById('transfer-phase').style.display = 'none';
     document.getElementById('tactics-phase').style.display = 'none';
     document.getElementById('loading-phase').style.display = 'block';
+    document.getElementById('match-results-phase').style.display = 'none';
+    document.getElementById('loading-countdown').innerText = `Match ${fixtureIndex + 1} of ${totalFixtures}: ${fixture.team1Name} vs ${fixture.team2Name}`;
+    document.getElementById('live-match-score').innerText = `0' — ${fixture.team1Name} 0 - 0 ${fixture.team2Name}`;
+    document.getElementById('commentary-feed').innerHTML = '';
+}
 
-    let loadTimer = 10;
-    const loadInterval = setInterval(() => {
-        loadTimer--;
-        document.getElementById('loading-countdown').innerText = `Simulating Match... ${loadTimer}s`;
-        if (loadTimer <= 0) clearInterval(loadInterval);
-    }, 1000);
+function appendCommentaryEvent(event) {
+    const feed = document.getElementById('commentary-feed');
+    const line = document.createElement('div');
+    line.className = `commentary-line ${event.kind || ''}`;
+    const minute = document.createElement('strong');
+    minute.innerText = `${event.minute}'`;
+    line.append(minute, document.createTextNode(event.text));
+    feed.appendChild(line);
+    feed.scrollTop = feed.scrollHeight;
+    if (event.score) document.getElementById('live-match-score').innerText = `${event.minute}' — ${event.score}`;
 }
 
 function calculateTeamMetrics(teamName, tacticsMap) {
@@ -414,7 +705,7 @@ function calculateTeamMetrics(teamName, tacticsMap) {
         totalPhysical += p.physical * adjustedModifier;
 
         const baseOverall = p.overall ?? Math.round((p.pace + p.shooting + p.passing + p.dribbling + p.defence + p.physical) / 6);
-        const adjustedRating = Math.round(baseOverall * adjustedModifier);
+        const adjustedRating = clampOverall(baseOverall * adjustedModifier, MAX_PLAYER_MATCH_OVR);
         totalAdjustedRating += adjustedRating;
 
         playersInfo.push({
@@ -427,7 +718,7 @@ function calculateTeamMetrics(teamName, tacticsMap) {
         });
     });
 
-    const count = squadNames.length || 5;
+    const count = Math.max(1, squadNames.length);
     const avgPace = totalPace / count;
     const avgShooting = totalShooting / count;
     const avgPassing = totalPassing / count;
@@ -439,8 +730,8 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const noise = () => (Math.random() * 0.1) + 0.95; // Random multiplier between 0.95 and 1.05
     
     const attackQuality = (avgShooting * 0.55) + (avgDribbling * 0.20) + (avgPassing * 0.25);
-    const rating = Math.round((totalAdjustedRating / count) * (1 + formationBonus + chemistryBonus));
-    const xG = parseFloat(Math.max(0.12, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2));
+    const rating = squadSize ? clampOverall((totalAdjustedRating / count) * (1 + formationBonus + chemistryBonus)) : 0;
+    const xG = squadSize ? parseFloat(Math.max(0.12, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2)) : 0;
     const controlPower = (avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5);
     const chances = Math.max(1, Math.round(((avgPassing * 0.25) + (avgDribbling * 0.2)) * noise()));
     const passes = Math.max(80, Math.round(((avgPassing * 7.5) + (avgPace * 2.0)) * noise()));
@@ -451,10 +742,7 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     return { rating, xG, chances, passes, tackles, controlPower, defensiveSecurity, players: playersInfo, squadSize, squadFactor, formationBonus, chemistryBonus, chemistryPairs, structureScore, formation };
 }
 
-function runMatchSimulationEngine() {
-    const playerNames = Object.keys(gameRosters);
-    const team1Name = playerNames[0];
-    const team2Name = playerNames[1] || "Opposition AI";
+function runMatchSimulationEngine(team1Name, team2Name) {
 
     const team1Stats = calculateTeamMetrics(team1Name, lockedTactics[team1Name]);
     const team2Stats = calculateTeamMetrics(team2Name, lockedTactics[team2Name]);
@@ -470,11 +758,11 @@ function runMatchSimulationEngine() {
     // Boost xG based on team OVR difference to ensure better teams create more chances
     const ratingDiff = team1Stats.rating - team2Stats.rating;
     if (ratingDiff > 5) {
-        team1Stats.xG = parseFloat((team1Stats.xG + (ratingDiff * 0.1)).toFixed(2));
-        team2Stats.xG = Math.max(0.1, parseFloat((team2Stats.xG - (ratingDiff * 0.05)).toFixed(2)));
+        team1Stats.xG = team1Stats.squadSize ? parseFloat((team1Stats.xG + (ratingDiff * 0.1)).toFixed(2)) : 0;
+        team2Stats.xG = team2Stats.squadSize ? Math.max(0.1, parseFloat((team2Stats.xG - (ratingDiff * 0.05)).toFixed(2))) : 0;
     } else if (ratingDiff < -5) {
-        team2Stats.xG = parseFloat((team2Stats.xG + (Math.abs(ratingDiff) * 0.1)).toFixed(2));
-        team1Stats.xG = Math.max(0.1, parseFloat((team1Stats.xG - (Math.abs(ratingDiff) * 0.05)).toFixed(2)));
+        team2Stats.xG = team2Stats.squadSize ? parseFloat((team2Stats.xG + (Math.abs(ratingDiff) * 0.1)).toFixed(2)) : 0;
+        team1Stats.xG = team1Stats.squadSize ? Math.max(0.1, parseFloat((team1Stats.xG - (Math.abs(ratingDiff) * 0.05)).toFixed(2))) : 0;
     }
 
     team1Stats.xG = applyDefensivePressureToXg(team1Stats.xG, team2Stats.defensiveSecurity);
@@ -486,7 +774,7 @@ function runMatchSimulationEngine() {
     allPlayers.forEach(p => {
         // Random performance form: Swings between -8 and +12 OVR
         const formSwing = Math.floor(Math.random() * 21) - 8; 
-        p.matchRating = p.rating + formSwing;
+        p.matchRating = clampOverall(p.rating + formSwing, MAX_PLAYER_MATCH_OVR);
         p.formSwing = formSwing;
         p.goals = 0;
         p.assists = 0;
@@ -521,6 +809,58 @@ function runMatchSimulationEngine() {
         goalEvents,
         motm
     };
+}
+
+function buildMatchTimeline(match) {
+    const randomPlayer = (teamStats, preferredGroup) => {
+        const matching = teamStats.players.filter(player => !preferredGroup || POSITION_GROUPS[player.pos] === preferredGroup);
+        const pool = matching.length ? matching : teamStats.players;
+        return pool[Math.floor(Math.random() * pool.length)]?.name || 'A player';
+    };
+    const side = () => Math.random() < 0.5
+        ? { name: match.team1Name, stats: match.team1Stats }
+        : { name: match.team2Name, stats: match.team2Stats };
+    const standardMinutes = [1, 5, 9, 15, 21, 28, 34, 41, 48, 55, 62, 69, 75, 82, 87];
+    const eventFactories = [
+        selected => `${randomPlayer(selected.stats, 'MID')} keeps the move flowing with a sharp pass for ${selected.name}.`,
+        selected => `${randomPlayer(selected.stats, 'DEF')} makes a crucial interception for ${selected.name}!`,
+        selected => `${randomPlayer(selected.stats)} is fouled as ${selected.name} try to break forward.`,
+        selected => `${selected.name} have a free kick; ${randomPlayer(selected.stats, 'MID')} bends it narrowly over.`,
+        selected => `${randomPlayer(selected.stats, 'ATT')} gets a shot away for ${selected.name}, but it is saved.`,
+        selected => `Penalty appeal for ${selected.name}! The referee waves play on after a strong challenge.`,
+        selected => `${randomPlayer(selected.stats, 'DEF')} wins the ball back cleanly for ${selected.name}.`
+    ];
+    const timeline = standardMinutes.map((minute, index) => {
+        const selected = side();
+        return { minute, kind: index === 2 ? 'card' : '', text: eventFactories[index % eventFactories.length](selected) };
+    });
+
+    let score1 = 0;
+    let score2 = 0;
+    match.goalEvents.forEach(goal => {
+        if (goal.team === match.team1Name) score1++;
+        else score2++;
+        const assistText = goal.assist ? ` Assist: ${goal.assist}.` : '';
+        timeline.push({
+            minute: goal.minute,
+            kind: 'goal',
+            text: `GOAL! ${goal.scorer} scores a ${goal.type.toLowerCase()} for ${goal.team}.${assistText}`,
+            score: `${match.team1Name} ${score1} - ${score2} ${match.team2Name}`
+        });
+    });
+    timeline.push({
+        minute: 90,
+        kind: 'full-time',
+        text: `Full time: ${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}.`,
+        score: `${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}`
+    });
+    return timeline.sort((first, second) => first.minute - second.minute || (first.kind === 'goal' ? 1 : -1));
+}
+
+function updateTournamentView(results, currentMatch) {
+    tournamentResults = results;
+    const summary = document.getElementById('live-match-score');
+    if (summary && currentMatch) summary.innerText = `Full time — ${currentMatch.team1Name} ${currentMatch.team1Goals} - ${currentMatch.team2Goals} ${currentMatch.team2Name}`;
 }
 
 function simulateGoals(xg) {
@@ -571,6 +911,7 @@ function generateGoalEvents(teamName, goalCount, players, goalEvents, shotTypes)
 }
 
 function applyDefensivePressureToXg(xg, opponentDefensiveSecurity) {
+    if (xg <= 0) return 0;
     const defensiveGap = 70 - opponentDefensiveSecurity;
     const concessionModifier = Math.min(1.35, Math.max(0.82, 1 + (defensiveGap / 140)));
     return parseFloat(Math.max(0.1, xg * concessionModifier).toFixed(2));
@@ -618,7 +959,7 @@ function determineManOfTheMatch({ team1Name, team2Name, team1Goals, team2Goals, 
             : Math.max(0, 2 - goalsAgainst);
         const midfieldBonus = group === "MID" ? Math.min(4, Math.round(player.rating / 25)) : 0;
 
-        player.motmScore = Math.round(player.matchRating + goalBonus + assistBonus + defensiveBonus + midfieldBonus + resultBonus);
+        player.motmScore = clampOverall(player.matchRating + goalBonus + assistBonus + defensiveBonus + midfieldBonus + resultBonus);
         player.finalOverall = player.motmScore;
 
         if (player.motmScore > highestScore) {
@@ -642,14 +983,51 @@ function renderMatchResults(payload) {
     document.getElementById('loading-phase').style.display = 'none';
     document.getElementById('match-results-phase').style.display = 'block';
 
+    const results = payload.tournamentResults || [payload];
+    tournamentResults = results;
+    selectedTournamentMatchIndex = results.findIndex(match =>
+        match === payload ||
+        (match.team1Name === payload.team1Name &&
+            match.team2Name === payload.team2Name &&
+            match.team1Goals === payload.team1Goals &&
+            match.team2Goals === payload.team2Goals)
+    );
+    if (selectedTournamentMatchIndex === -1) selectedTournamentMatchIndex = Math.max(0, results.length - 1);
+
+    renderFixtureResults(results, selectedTournamentMatchIndex);
+    renderSelectedMatchDetails(results[selectedTournamentMatchIndex] || payload);
+}
+
+function renderFixtureResults(results, selectedIndex = 0) {
+    const fixtureResults = document.getElementById('fixture-results');
+    fixtureResults.innerHTML = results.map((match, index) => `
+        <button type="button" class="fixture-result ${index === selectedIndex ? 'active' : ''}" data-match-index="${index}" aria-pressed="${index === selectedIndex}">
+            ${match.team1Name} <strong>${match.team1Goals} - ${match.team2Goals}</strong> ${match.team2Name}
+        </button>
+    `).join('');
+}
+
+function selectTournamentMatch(index) {
+    const match = tournamentResults[index];
+    if (!match) return;
+    selectedTournamentMatchIndex = index;
+    renderFixtureResults(tournamentResults, selectedTournamentMatchIndex);
+    renderSelectedMatchDetails(match);
+}
+
+function renderSelectedMatchDetails(payload) {
+    if (!payload) return;
+
+    const motmSummary = payload.motm ? `
+        <div class="motm-summary">
+            Man of the Match: <strong>${payload.motm.name} (${payload.motm.team})</strong>
+            <span>
+                ${payload.motm.rating} final OVR - ${payload.motm.goals}G ${payload.motm.assists}A
+            </span>
+        </div>` : '';
     document.getElementById('scoreboard-header').innerHTML = `
         ${payload.team1Name} ${payload.team1Goals} - ${payload.team2Goals} ${payload.team2Name}
-        <div style="color: #ffd166; font-size: 1.1rem; margin-top: 15px; text-transform: uppercase;">
-            ⭐ Man of the Match: <strong>${payload.motm.name} (${payload.motm.team})</strong>
-            <span style="display:block; font-size:0.78rem; color:#cbd5e1; margin-top:4px;">
-                ${payload.motm.rating} final OVR · ${payload.motm.goals}G ${payload.motm.assists}A
-            </span>
-        </div>
+        ${motmSummary}
     `;
 
     const goalContainer = document.getElementById('goalscorers-list');
@@ -672,7 +1050,7 @@ function renderMatchResults(payload) {
             // Determine colors and + / - signs for the UI
             const sign = p.formSwing > 0 ? '+' : '';
             const color = p.formSwing > 0 ? '#4ade80' : (p.formSwing < 0 ? '#f87171' : '#cbd5e1');
-            const motmBadge = p.name === motm.name ? '<span style="color:#ffd166; font-size:0.82em; margin-left: 5px;">MOTM</span>' : '';
+            const motmBadge = p.name === motm?.name ? '<span style="color:#ffd166; font-size:0.82em; margin-left: 5px;">MOTM</span>' : '';
             
             return `<li>
                 ${p.name} <strong>(${p.pos})</strong> - ${p.finalOverall} OVR 
@@ -685,7 +1063,7 @@ function renderMatchResults(payload) {
 
     // Render Team 1 Stats & Squad
     document.getElementById('team1-stats-col').innerHTML = `
-        <h3>${payload.team1Name}</h3>
+        <h3><i class="team-colour-dot" style="background:${gameRosters[payload.team1Name]?.teamColour || '#4cc9f0'}"></i>${payload.team1Name}</h3>
         <div>Rating: <strong>${payload.team1Stats.rating} OVR</strong></div>
         <div>Squad: <strong>${payload.team1Stats.squadSize}/${MAX_SQUAD_SIZE}</strong> · Formation: <strong>${payload.team1Stats.formation}</strong></div>
         <div>Chemistry links: <strong>${payload.team1Stats.chemistryPairs}</strong> · Structure: <strong>${Math.round(payload.team1Stats.structureScore * 100)}%</strong></div>
@@ -700,7 +1078,7 @@ function renderMatchResults(payload) {
 
     // Render Team 2 Stats & Squad
     document.getElementById('team2-stats-col').innerHTML = `
-        <h3>${payload.team2Name}</h3>
+        <h3><i class="team-colour-dot" style="background:${gameRosters[payload.team2Name]?.teamColour || '#4cc9f0'}"></i>${payload.team2Name}</h3>
         <div>Rating: <strong>${payload.team2Stats.rating} OVR</strong></div>
         <div>Squad: <strong>${payload.team2Stats.squadSize}/${MAX_SQUAD_SIZE}</strong> · Formation: <strong>${payload.team2Stats.formation}</strong></div>
         <div>Chemistry links: <strong>${payload.team2Stats.chemistryPairs}</strong> · Structure: <strong>${Math.round(payload.team2Stats.structureScore * 100)}%</strong></div>
@@ -713,6 +1091,12 @@ function renderMatchResults(payload) {
         <ul style="list-style:none; font-size:0.85rem; color:#cbd5e1;">${renderSquadHtml(payload.team2Stats.players, payload.motm)}</ul>
     `;
 }
+
+document.getElementById('fixture-results').addEventListener('click', event => {
+    const resultButton = event.target.closest('.fixture-result');
+    if (!resultButton) return;
+    selectTournamentMatch(Number(resultButton.dataset.matchIndex));
+});
 
 // --- 11. BIDDING CONTROLS ---
 function attemptBid(addedAmount) {
@@ -742,3 +1126,27 @@ document.getElementById('bid1mil').addEventListener('click', () => attemptBid(1)
 document.getElementById('bid5mil').addEventListener('click', () => attemptBid(5));
 document.getElementById('bid10mil').addEventListener('click', () => attemptBid(10));
 document.getElementById('bid25mil').addEventListener('click', () => attemptBid(25));
+
+document.getElementById('trade-team-select').addEventListener('change', updateTradeTargetOptions);
+document.getElementById('sell-player-btn').addEventListener('click', () => {
+    const playerName = document.getElementById('sell-player-select').value;
+    if (!playerName) return;
+    if (isHost) sellPlayerToMarket(myName, playerName);
+    else connectionToHost.send({ type: 'SELL_PLAYER', name: myName, playerName });
+});
+document.getElementById('offer-trade-btn').addEventListener('click', () => {
+    const myPlayer = document.getElementById('trade-my-player-select').value;
+    const targetTeam = document.getElementById('trade-team-select').value;
+    const theirPlayer = document.getElementById('trade-their-player-select').value;
+    if (!myPlayer || !targetTeam || !theirPlayer) {
+        showCustomAlert('Choose both players before sending a trade offer.');
+        return;
+    }
+    const offer = { name: myName, targetTeam, myPlayer, theirPlayer };
+    if (isHost) createTradeOffer(offer);
+    else connectionToHost.send({ type: 'OFFER_TRADE', ...offer });
+});
+document.getElementById('close-market-btn').addEventListener('click', () => {
+    if (isHost) markReadyForTactics(myName);
+    else connectionToHost.send({ type: 'READY_FOR_TACTICS', name: myName });
+});

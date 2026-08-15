@@ -21,6 +21,12 @@
             <input type="text" id="username" placeholder="Enter Name" autocomplete="off">
         </div>
 
+        <div class="input-group colour-picker-row">
+            <label for="team-colour">Team Colour</label>
+            <input type="color" id="team-colour" value="#4cc9f0" aria-label="Choose your team colour">
+            <span id="team-colour-value">#4CC9F0</span>
+        </div>
+
         <div class="actions">
             <button id="createBtn" class="btn btn-primary">Create Lobby</button>
             <button id="joinBtn" class="btn btn-secondary">Join Lobby</button>
@@ -86,8 +92,32 @@
 
     <!-- END GAME & MATCH SIMULATION SCREEN -->
     <div id="end-screen" class="game-layout" style="display: none;">
+
+        <!-- Phase 1: Transfer Market -->
+        <div id="transfer-phase" class="bidding-area" style="display: none; width: 100%;">
+            <h1>Transfer Market</h1>
+            <h2 id="transfer-timer" class="timer" style="margin: 10px 0;">Market closes in: 25s</h2>
+            <p class="subtitle">Sell a player for 50% of their base price, or offer a direct player swap to another team.</p>
+            <div id="transfer-rosters" class="market-rosters"></div>
+            <div class="transfer-actions">
+                <div class="market-card">
+                    <h3>Sell a player</h3>
+                    <select id="sell-player-select"></select>
+                    <button id="sell-player-btn" class="btn btn-secondary">Sell for 50%</button>
+                </div>
+                <div class="market-card">
+                    <h3>Offer a trade</h3>
+                    <select id="trade-my-player-select"></select>
+                    <select id="trade-team-select"></select>
+                    <select id="trade-their-player-select"></select>
+                    <button id="offer-trade-btn" class="btn btn-primary">Send Swap Offer</button>
+                </div>
+            </div>
+            <div id="trade-offers" class="trade-offers"></div>
+            <button id="close-market-btn" class="btn btn-primary" style="margin-top: 18px;">Ready for Tactics</button>
+        </div>
         
-        <!-- Phase 1: Tactics Selection -->
+        <!-- Phase 2: Tactics Selection -->
         <div id="tactics-phase" class="bidding-area" style="width: 100%;">
             <h1>Set Your Lineup</h1>
             <h2 id="tactics-timer" class="timer" style="margin: 10px 0;">Tactics Time: 15s</h2>
@@ -97,17 +127,18 @@
             <button id="lockTacticsBtn" class="btn btn-primary">Lock In Tactics</button>
         </div>
 
-        <!-- Phase 2: Live Match Loading Screen -->
+        <!-- Phase 3: Live Match Commentary -->
         <div id="loading-phase" class="bidding-area" style="display: none; width: 100%; text-align: center;">
             <h1 style="color: #ffd166;">LIVE MATCH IN PROGRESS</h1>
-            <div class="spinner"></div>
-            <h2 id="loading-countdown" style="margin-top: 20px; font-size: 2rem; color: #4cc9f0;">Simulating Match... 10s</h2>
-            <p class="subtitle">Calculating player statistics, tactical bonuses, and match events...</p>
+            <h2 id="loading-countdown" style="margin-top: 12px; font-size: 1.4rem; color: #4cc9f0;">Preparing the fixture...</h2>
+            <p id="live-match-score" class="subtitle">0' — Kick-off is moments away.</p>
+            <div id="commentary-feed" class="commentary-feed" aria-live="polite"></div>
         </div>
 
-        <!-- Phase 3: Live Scoreboard & Final Stats -->
+        <!-- Phase 4: Tournament Results -->
         <div id="match-results-phase" class="bidding-area" style="display: none; width: 100%;">
-            <h1 style="color: #4cc9f0;">FINAL MATCH RESULT</h1>
+            <h1 style="color: #4cc9f0;">TOURNAMENT RESULTS</h1>
+            <div id="fixture-results" class="fixture-results"></div>
             
             <div class="scoreboard-card">
                 <div id="scoreboard-header" class="score-display-main">Team A 0 - 0 Team B</div>
@@ -123,7 +154,7 @@
         </div>
     </div>
 
-    <script src="players.js"></script>
-    <script src="script.js"></script>
+    <script src="players.js?v=20260815-2"></script>
+    <script src="script.js?v=20260815-2"></script>
 </body>
 </html>
