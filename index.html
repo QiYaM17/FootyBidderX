@@ -97,19 +97,23 @@
         <div id="transfer-phase" class="bidding-area" style="display: none; width: 100%;">
             <h1>Transfer Market</h1>
             <h2 id="transfer-timer" class="timer" style="margin: 10px 0;">Market closes in: 25s</h2>
-            <p class="subtitle">Sell a player for 50% of their base price, or offer a direct player swap to another team.</p>
+            <div class="market-banner"><span class="market-pill">SWAP ONLY</span><span>No selling, refunds, or cash deals</span></div>
+            <p class="subtitle">Choose one player to offer and one player to request. The other manager must accept before the squads change.</p>
             <div id="transfer-rosters" class="market-rosters"></div>
             <div class="transfer-actions">
                 <div class="market-card">
-                    <h3>Sell a player</h3>
-                    <select id="sell-player-select"></select>
-                    <button id="sell-player-btn" class="btn btn-secondary">Sell for 50%</button>
-                </div>
-                <div class="market-card">
-                    <h3>Offer a trade</h3>
+                    <h3>↔ Build a swap deal</h3>
+                    <div class="trade-field"><label for="trade-my-player-select">You offer</label>
                     <select id="trade-my-player-select"></select>
+                    </div>
+                    <div class="trade-arrow">⇄</div>
+                    <div class="trade-field"><label for="trade-team-select">Request from</label>
                     <select id="trade-team-select"></select>
+                    </div>
+                    <div class="trade-field"><label for="trade-their-player-select">You receive</label>
                     <select id="trade-their-player-select"></select>
+                    </div>
+                    <div id="trade-preview" class="trade-preview">Select players to preview the swap.</div>
                     <button id="offer-trade-btn" class="btn btn-primary">Send Swap Offer</button>
                 </div>
             </div>
@@ -120,7 +124,7 @@
         <!-- Phase 2: Tactics Selection -->
         <div id="tactics-phase" class="bidding-area" style="width: 100%;">
             <h1>Set Your Lineup</h1>
-            <h2 id="tactics-timer" class="timer" style="margin: 10px 0;">Tactics Time: 15s</h2>
+            <h2 id="tactics-timer" class="timer" style="margin: 10px 0;">Tactics Time: 20s</h2>
             <p class="subtitle">Assign unique positions. Natural positions, a balanced formation and chemistry all matter.</p>
             
             <div id="team-builder-list" style="text-align: left; margin-bottom: 20px;"></div>
@@ -139,6 +143,11 @@
         <div id="match-results-phase" class="bidding-area" style="display: none; width: 100%;">
             <h1 style="color: #4cc9f0;">TOURNAMENT RESULTS</h1>
             <div id="fixture-results" class="fixture-results"></div>
+            <div class="final-commentary-panel">
+                <h3>Match Commentary</h3>
+                <p class="subtitle">Key moments from the selected completed fixture</p>
+                <div id="final-commentary-feed" class="commentary-feed final-commentary-feed"></div>
+            </div>
             
             <div class="scoreboard-card">
                 <div id="scoreboard-header" class="score-display-main">Team A 0 - 0 Team B</div>
@@ -154,7 +163,7 @@
         </div>
     </div>
 
-    <script src="players.js?v=20260815-2"></script>
-    <script src="script.js?v=20260815-2"></script>
+    <script src="players.js?v=20260817-2"></script>
+    <script src="script.js?v=20260817-2"></script>
 </body>
 </html>

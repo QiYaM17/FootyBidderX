@@ -23,7 +23,7 @@ const MAX_LOBBY_PLAYERS = 3;
 const TRANSFER_DURATION = 25;
 const TEAM_COLOURS = ["#4cc9f0", "#f72585", "#ffd166"];
 const MAX_MATCH_OVR = 110;
-const MAX_PLAYER_MATCH_OVR = 110;
+const MAX_BASE_MATCH_OVR = 110;
 const POSITION_GROUPS = {
     GK: "GK", CB: "DEF", LB: "DEF", RB: "DEF", LWB: "DEF", RWB: "DEF",
     CDM: "MID", CM: "MID", CAM: "MID", LM: "MID", RM: "MID",
@@ -32,7 +32,7 @@ const POSITION_GROUPS = {
 
 // Tactics & Simulation State
 let tacticsTimerInterval;
-let tacticsTimeLeft = 15;
+let tacticsTimeLeft = 20;
 let lockedTactics = {};
 let hasSubmittedTactics = false;
 let transferTimerInterval;
@@ -132,8 +132,6 @@ function setupHost() {
                 processBid(data.amount, senderName);
             } else if (data.type === 'SUBMIT_TACTICS') {
                 handleClientTactics(connectionOwners.get(conn), data.tactics);
-            } else if (data.type === 'SELL_PLAYER') {
-                sellPlayerToMarket(connectionOwners.get(conn), data.playerName);
             } else if (data.type === 'OFFER_TRADE') {
                 createTradeOffer({ ...data, name: connectionOwners.get(conn) });
             } else if (data.type === 'RESPOND_TRADE') {
@@ -398,13 +396,13 @@ function renderTransferMarket() {
     }).join('');
 
     const ownOptions = myRoster.squad.map(name => `<option value="${name}">${name}</option>`).join('') || '<option value="">No players available</option>';
-    document.getElementById('sell-player-select').innerHTML = ownOptions;
     document.getElementById('trade-my-player-select').innerHTML = ownOptions;
 
     const otherTeams = Object.keys(gameRosters).filter(name => name !== myName);
     const teamSelect = document.getElementById('trade-team-select');
     teamSelect.innerHTML = otherTeams.map(name => `<option value="${name}">${name}</option>`).join('') || '<option value="">No other team</option>';
     updateTradeTargetOptions();
+    updateTradePreview();
 
     const offerArea = document.getElementById('trade-offers');
     const relevantOffers = pendingTradeOffers.filter(offer => offer.to === myName);
@@ -413,7 +411,6 @@ function renderTransferMarket() {
         : '<p class="subtitle" style="margin: 0;">No trade offers waiting.</p>';
 
     const locked = transferTimeLeft <= 0 || !myRoster.squad.length;
-    document.getElementById('sell-player-btn').disabled = locked;
     document.getElementById('offer-trade-btn').disabled = locked || !otherTeams.length;
     document.getElementById('close-market-btn').innerText = myRoster.readyForTactics ? 'Ready for Tactics ✓' : 'Ready for Tactics';
     document.getElementById('close-market-btn').disabled = Boolean(myRoster.readyForTactics);
@@ -425,16 +422,16 @@ function updateTradeTargetOptions() {
     document.getElementById('trade-their-player-select').innerHTML = targetRoster.squad.map(name => `<option value="${name}">${name}</option>`).join('') || '<option value="">No players available</option>';
 }
 
-function sellPlayerToMarket(ownerName, playerName) {
-    if (!transferPhaseActive) return;
-    const roster = gameRosters[ownerName];
-    const player = playersData.find(item => item.name === playerName);
-    if (!roster || !player || !roster.squad.includes(playerName)) return;
-    roster.squad = roster.squad.filter(name => name !== playerName);
-    roster.money += Math.floor(player.basePrice * 0.5);
-    availablePlayers.push(player);
-    pendingTradeOffers = pendingTradeOffers.filter(offer => offer.from !== ownerName && offer.to !== ownerName);
-    broadcastTransferState('TRANSFER_STATE');
+function updateTradePreview() {
+    const offered = document.getElementById('trade-my-player-select').value;
+    const targetTeam = document.getElementById('trade-team-select').value;
+    const requested = document.getElementById('trade-their-player-select').value;
+    const preview = document.getElementById('trade-preview');
+    if (!offered || !targetTeam || !requested) {
+        preview.innerText = 'Select players to preview the swap.';
+        return;
+    }
+    preview.innerText = `You offer ${offered} ↔ You receive ${requested} from ${targetTeam}`;
 }
 
 function createTradeOffer({ name, targetTeam, myPlayer, theirPlayer }) {
@@ -535,7 +532,7 @@ function validateUniquePositions(e) {
 }
 
 function startTacticsTimer() {
-    tacticsTimeLeft = 15;
+    tacticsTimeLeft = 20;
     clearInterval(tacticsTimerInterval);
     
     tacticsTimerInterval = setInterval(() => {
@@ -625,6 +622,7 @@ function runTournamentFixture(index) {
     const fixture = tournamentFixtures[index];
     const matchPayload = runMatchSimulationEngine(fixture.team1Name, fixture.team2Name);
     const timeline = buildMatchTimeline(matchPayload);
+    matchPayload.commentary = timeline;
     const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures: tournamentFixtures.length };
     hostConnections.forEach(conn => conn.send(startMessage));
     showLoadingScreen(fixture, index, tournamentFixtures.length);
@@ -644,7 +642,7 @@ function runTournamentFixture(index) {
         hostConnections.forEach(conn => conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }));
         updateTournamentView(tournamentResults, matchPayload);
         setTimeout(() => runTournamentFixture(index + 1), 1200);
-    }, 1000);
+    }, 1250);
 }
 
 function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1) {
@@ -657,8 +655,8 @@ function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1) {
     document.getElementById('commentary-feed').innerHTML = '';
 }
 
-function appendCommentaryEvent(event) {
-    const feed = document.getElementById('commentary-feed');
+function appendCommentaryEvent(event, feedId = 'commentary-feed') {
+    const feed = document.getElementById(feedId);
     const line = document.createElement('div');
     line.className = `commentary-line ${event.kind || ''}`;
     const minute = document.createElement('strong');
@@ -667,6 +665,12 @@ function appendCommentaryEvent(event) {
     feed.appendChild(line);
     feed.scrollTop = feed.scrollHeight;
     if (event.score) document.getElementById('live-match-score').innerText = `${event.minute}' — ${event.score}`;
+}
+
+function renderFinalCommentary(match) {
+    const feed = document.getElementById('final-commentary-feed');
+    feed.innerHTML = '';
+    (match?.commentary || []).forEach(event => appendCommentaryEvent(event, 'final-commentary-feed'));
 }
 
 function calculateTeamMetrics(teamName, tacticsMap) {
@@ -705,7 +709,7 @@ function calculateTeamMetrics(teamName, tacticsMap) {
         totalPhysical += p.physical * adjustedModifier;
 
         const baseOverall = p.overall ?? Math.round((p.pace + p.shooting + p.passing + p.dribbling + p.defence + p.physical) / 6);
-        const adjustedRating = clampOverall(baseOverall * adjustedModifier, MAX_PLAYER_MATCH_OVR);
+        const adjustedRating = clampOverall(baseOverall * adjustedModifier, MAX_BASE_MATCH_OVR);
         totalAdjustedRating += adjustedRating;
 
         playersInfo.push({
@@ -733,9 +737,9 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const rating = squadSize ? clampOverall((totalAdjustedRating / count) * (1 + formationBonus + chemistryBonus)) : 0;
     const xG = squadSize ? parseFloat(Math.max(0.12, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2)) : 0;
     const controlPower = (avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5);
-    const chances = Math.max(1, Math.round(((avgPassing * 0.25) + (avgDribbling * 0.2)) * noise()));
-    const passes = Math.max(80, Math.round(((avgPassing * 7.5) + (avgPace * 2.0)) * noise()));
-    const tackles = Math.max(5, Math.round(((avgDefence * 0.45) + (avgPhysical * 0.35)) * noise()));
+    const chances = squadSize ? Math.max(1, Math.round(((avgPassing * 0.25) + (avgDribbling * 0.2)) * noise())) : 0;
+    const passes = squadSize ? Math.max(80, Math.round(((avgPassing * 7.5) + (avgPace * 2.0)) * noise())) : 0;
+    const tackles = squadSize ? Math.max(5, Math.round(((avgDefence * 0.45) + (avgPhysical * 0.35)) * noise())) : 0;
 
     const defensiveSecurity = avgDefence * (0.82 + (squadFactor * 0.18)) * (0.92 + (structureScore * 0.08));
 
@@ -774,7 +778,7 @@ function runMatchSimulationEngine(team1Name, team2Name) {
     allPlayers.forEach(p => {
         // Random performance form: Swings between -8 and +12 OVR
         const formSwing = Math.floor(Math.random() * 21) - 8; 
-        p.matchRating = clampOverall(p.rating + formSwing, MAX_PLAYER_MATCH_OVR);
+        p.matchRating = clampOverall(p.rating + formSwing, MAX_BASE_MATCH_OVR);
         p.formSwing = formSwing;
         p.goals = 0;
         p.assists = 0;
@@ -793,6 +797,8 @@ function runMatchSimulationEngine(team1Name, team2Name) {
     generateGoalEvents(team2Name, team2Goals, team2Stats.players, goalEvents, shotTypes);
 
     goalEvents.sort((a, b) => a.minute - b.minute);
+    reconcileMatchContributions(team1Stats.players, team1Name, goalEvents);
+    reconcileMatchContributions(team2Stats.players, team2Name, goalEvents);
     const motm = determineManOfTheMatch({
         team1Name,
         team2Name,
@@ -822,17 +828,19 @@ function buildMatchTimeline(match) {
         : { name: match.team2Name, stats: match.team2Stats };
     const standardMinutes = [1, 5, 9, 15, 21, 28, 34, 41, 48, 55, 62, 69, 75, 82, 87];
     const eventFactories = [
-        selected => `${randomPlayer(selected.stats, 'MID')} keeps the move flowing with a sharp pass for ${selected.name}.`,
-        selected => `${randomPlayer(selected.stats, 'DEF')} makes a crucial interception for ${selected.name}!`,
-        selected => `${randomPlayer(selected.stats)} is fouled as ${selected.name} try to break forward.`,
-        selected => `${selected.name} have a free kick; ${randomPlayer(selected.stats, 'MID')} bends it narrowly over.`,
-        selected => `${randomPlayer(selected.stats, 'ATT')} gets a shot away for ${selected.name}, but it is saved.`,
-        selected => `Penalty appeal for ${selected.name}! The referee waves play on after a strong challenge.`,
-        selected => `${randomPlayer(selected.stats, 'DEF')} wins the ball back cleanly for ${selected.name}.`
+        selected => ({ kind: '', text: `${randomPlayer(selected.stats, 'MID')} keeps the move flowing with a sharp pass for ${selected.name}.` }),
+        selected => ({ kind: '', text: `${randomPlayer(selected.stats, 'DEF')} makes a crucial interception for ${selected.name}!` }),
+        selected => ({ kind: 'foul', text: `${randomPlayer(selected.stats)} is fouled as ${selected.name} try to break forward.` }),
+        selected => ({ kind: 'set-piece', text: `${selected.name} have a free kick; ${randomPlayer(selected.stats, 'MID')} bends it narrowly over.` }),
+        selected => ({ kind: 'shot', text: `${randomPlayer(selected.stats, 'ATT')} gets a shot away for ${selected.name}, but it is saved.` }),
+        selected => ({ kind: 'set-piece', text: `Penalty appeal for ${selected.name}! The referee waves play on after a strong challenge.` }),
+        selected => ({ kind: '', text: `${randomPlayer(selected.stats, 'DEF')} wins the ball back cleanly for ${selected.name}.` })
     ];
     const timeline = standardMinutes.map((minute, index) => {
         const selected = side();
-        return { minute, kind: index === 2 ? 'card' : '', text: eventFactories[index % eventFactories.length](selected) };
+        const event = eventFactories[index % eventFactories.length](selected);
+        if (index === 2) event.kind = 'card';
+        return { minute, ...event };
     });
 
     let score1 = 0;
@@ -910,6 +918,20 @@ function generateGoalEvents(teamName, goalCount, players, goalEvents, shotTypes)
     }
 }
 
+function reconcileMatchContributions(players, teamName, goalEvents) {
+    const playersByName = new Map(players.map(player => [player.name, player]));
+    players.forEach(player => {
+        player.goals = 0;
+        player.assists = 0;
+    });
+    goalEvents.filter(event => event.team === teamName).forEach(event => {
+        const scorer = playersByName.get(event.scorer);
+        const assister = event.assist ? playersByName.get(event.assist) : null;
+        if (scorer) scorer.goals += 1;
+        if (assister) assister.assists += 1;
+    });
+}
+
 function applyDefensivePressureToXg(xg, opponentDefensiveSecurity) {
     if (xg <= 0) return 0;
     const defensiveGap = 70 - opponentDefensiveSecurity;
@@ -940,6 +962,12 @@ function hasChemistry(player, teammate) {
     return player.chemistryWith?.includes(teammate.name) || teammate.chemistryWith?.includes(player.name);
 }
 
+function scaleFinalOverall(rawScore) {
+    // Compress exceptional match scores smoothly around 106 OVR without imposing a hard final cap.
+    // Goals and assists still change the raw score substantially and therefore decide MOTM correctly.
+    return Math.round(106 + (12 * Math.tanh((rawScore - 106) / 65)));
+}
+
 function determineManOfTheMatch({ team1Name, team2Name, team1Goals, team2Goals, team1Stats, team2Stats }) {
     const allPlayers = [
         ...team1Stats.players.map(player => ({ player, teamName: team1Name, teamGoals: team1Goals, goalsAgainst: team2Goals })),
@@ -952,22 +980,23 @@ function determineManOfTheMatch({ team1Name, team2Name, team1Goals, team2Goals, 
     allPlayers.forEach(({ player, teamName, teamGoals, goalsAgainst }) => {
         const group = POSITION_GROUPS[player.pos];
         const resultBonus = teamGoals > goalsAgainst ? 3 : (teamGoals === goalsAgainst ? 1 : 0);
-        const goalBonus = player.goals * (group === "ATT" ? 9 : group === "MID" ? 10 : 12);
-        const assistBonus = player.assists * 5;
+        const goalBonus = player.goals * 24;
+        const assistBonus = player.assists * 14;
         const defensiveBonus = (group === "GK" || group === "DEF")
             ? Math.max(0, 7 - (goalsAgainst * 3))
             : Math.max(0, 2 - goalsAgainst);
         const midfieldBonus = group === "MID" ? Math.min(4, Math.round(player.rating / 25)) : 0;
 
-        player.motmScore = clampOverall(player.matchRating + goalBonus + assistBonus + defensiveBonus + midfieldBonus + resultBonus);
-        player.finalOverall = player.motmScore;
+        const rawMotmScore = player.matchRating + goalBonus + assistBonus + defensiveBonus + midfieldBonus + resultBonus;
+        player.motmScore = rawMotmScore;
+        player.finalOverall = scaleFinalOverall(rawMotmScore);
 
-        if (player.motmScore > highestScore) {
-            highestScore = player.motmScore;
+        if (rawMotmScore > highestScore) {
+            highestScore = rawMotmScore;
             motm = {
                 name: player.name,
                 rating: player.finalOverall,
-                score: player.motmScore,
+                score: player.finalOverall,
                 team: teamName,
                 goals: player.goals,
                 assists: player.assists
@@ -1017,6 +1046,7 @@ function selectTournamentMatch(index) {
 
 function renderSelectedMatchDetails(payload) {
     if (!payload) return;
+    renderFinalCommentary(payload);
 
     const motmSummary = payload.motm ? `
         <div class="motm-summary">
@@ -1127,13 +1157,12 @@ document.getElementById('bid5mil').addEventListener('click', () => attemptBid(5)
 document.getElementById('bid10mil').addEventListener('click', () => attemptBid(10));
 document.getElementById('bid25mil').addEventListener('click', () => attemptBid(25));
 
-document.getElementById('trade-team-select').addEventListener('change', updateTradeTargetOptions);
-document.getElementById('sell-player-btn').addEventListener('click', () => {
-    const playerName = document.getElementById('sell-player-select').value;
-    if (!playerName) return;
-    if (isHost) sellPlayerToMarket(myName, playerName);
-    else connectionToHost.send({ type: 'SELL_PLAYER', name: myName, playerName });
+document.getElementById('trade-team-select').addEventListener('change', () => {
+    updateTradeTargetOptions();
+    updateTradePreview();
 });
+document.getElementById('trade-my-player-select').addEventListener('change', updateTradePreview);
+document.getElementById('trade-their-player-select').addEventListener('change', updateTradePreview);
 document.getElementById('offer-trade-btn').addEventListener('click', () => {
     const myPlayer = document.getElementById('trade-my-player-select').value;
     const targetTeam = document.getElementById('trade-team-select').value;

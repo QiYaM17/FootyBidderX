@@ -100,11 +100,16 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 .market-team h3 { color: var(--team-colour, #4cc9f0); margin-bottom: 8px; }
 .market-team ul { list-style: none; color: #cbd5e1; font-size: 0.88rem; }
 .market-team li { padding: 3px 0; border-bottom: 1px solid #334155; }
-.transfer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; text-align: left; }
+.transfer-actions { display: grid; grid-template-columns: minmax(0, 680px); justify-content: center; gap: 14px; margin-top: 16px; text-align: left; }
 .market-card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 14px; }
 .market-card h3 { color: #ffd166; margin-bottom: 10px; }
 .market-card select { width: 100%; margin-bottom: 9px; padding: 9px; border-radius: 6px; border: 1px solid #4cc9f0; background: #1e293b; color: #f8fafc; }
 .market-card > .btn { width: 100%; }
+.market-banner { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 12px auto; color: #cbd5e1; font-size: 0.85rem; }
+.market-pill { padding: 5px 9px; border-radius: 999px; background: rgba(76, 201, 240, 0.15); border: 1px solid #4cc9f0; color: #4cc9f0; font-size: 0.72rem; font-weight: 800; letter-spacing: 1px; }
+.trade-field label { margin-bottom: 5px; color: #94a3b8; font-size: 0.75rem; }
+.trade-arrow { text-align: center; color: #ffd166; font-size: 1.25rem; line-height: 1; margin: -2px 0 3px; }
+.trade-preview { margin: 5px 0 12px; padding: 9px 10px; border-left: 3px solid #4cc9f0; border-radius: 5px; background: #1e293b; color: #cbd5e1; font-size: 0.84rem; }
 .trade-offers { margin-top: 14px; text-align: left; }
 .trade-offer { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: #1e293b; padding: 10px; margin-bottom: 8px; border-radius: 8px; color: #cbd5e1; }
 .trade-offer .btn { flex: 0; padding: 7px 10px; font-size: 0.8rem; }
@@ -115,6 +120,13 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 .commentary-line strong { color: #ffd166; margin-right: 8px; }
 .commentary-line.goal { border-left: 3px solid #4ade80; color: #f8fafc; }
 .commentary-line.card { border-left: 3px solid #f87171; }
+.commentary-line.set-piece { border-left: 3px solid #c084fc; background: rgba(192, 132, 252, 0.08); }
+.commentary-line.shot { border-left: 3px solid #4cc9f0; }
+.commentary-line.full-time { border-left: 3px solid #ffd166; color: #f8fafc; font-weight: 700; }
+.final-commentary-panel { margin: 0 auto 18px; max-width: 720px; padding: 14px; text-align: left; background: #0f172a; border: 1px solid #334155; border-radius: 10px; }
+.final-commentary-panel h3 { color: #4cc9f0; margin-bottom: 2px; }
+.final-commentary-panel .subtitle { margin-bottom: 9px; }
+.final-commentary-feed { height: 240px; margin: 0; }
 @keyframes commentary-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
 /* Scoreboard & Match Results */
