@@ -58,6 +58,7 @@ body {
 .team-block ul { list-style: none; font-size: 0.85rem; color: #cbd5e1; }
 .team-block li { border-bottom: 1px solid #334155; padding: 4px 0; }
 .squad-ovr { float: right; color: #ffd166; font-size: 0.78rem; }
+.power-card-label { margin: -2px 0 7px; color: #c084fc; font-size: 0.74rem; font-weight: 700; }
 
 h1 { font-size: 2.2rem; margin-bottom: 8px; color: #4cc9f0; text-transform: uppercase; letter-spacing: 2px; }
 p.subtitle { font-size: 0.95rem; color: #94a3b8; margin-bottom: 20px; }
@@ -83,6 +84,16 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 .panel { display: none; background-color: #1e293b; border-radius: 8px; padding: 20px; margin-top: 10px; }
 .panel.active { display: block; }
 .code-display { font-size: 2rem; font-weight: bold; letter-spacing: 6px; color: #4cc9f0; margin: 10px 0; }
+
+.power-card-screen { max-width: 920px; }
+.power-card-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 24px 0 14px; text-align: left; }
+.power-card { min-height: 195px; display: flex; flex-direction: column; gap: 10px; padding: 18px; border: 2px solid #334155; border-radius: 12px; background: linear-gradient(145deg, #1e293b, #0f172a); color: #ffffff; cursor: pointer; transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s; }
+.power-card:hover:not(:disabled) { transform: translateY(-4px); border-color: #4cc9f0; box-shadow: 0 10px 24px rgba(76, 201, 240, 0.18); }
+.power-card:disabled { cursor: default; opacity: 0.72; }
+.power-card .card-phase { color: #4cc9f0; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+.power-card h3 { color: #ffd166; font-size: 1.1rem; }
+.power-card p { color: #cbd5e1; font-size: 0.9rem; line-height: 1.4; }
+.power-card-status { color: #94a3b8; font-weight: 600; }
 
 /* Tactics Row */
 .builder-row {
@@ -119,6 +130,21 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 
 /* Live Match Commentary */
 .commentary-feed { max-width: 680px; height: 320px; overflow-y: auto; margin: 18px auto 0; padding: 10px; text-align: left; background: #0f172a; border: 1px solid #334155; border-radius: 10px; }
+.live-match-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr); gap: 16px; max-width: 1100px; margin: 0 auto; text-align: left; }
+.live-pitch-shell { padding: 10px; border-radius: 14px; background: #0f172a; border: 1px solid #334155; }
+.live-pitch { position: relative; aspect-ratio: 1.55 / 1; overflow: hidden; border: 2px solid rgba(255, 255, 255, 0.8); border-radius: 8px; background: repeating-linear-gradient(90deg, #17613d 0 10%, #1e7549 10% 20%); box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.35); }
+.pitch-halfway-line { position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; background: rgba(255, 255, 255, 0.8); }
+.pitch-centre-circle { position: absolute; top: 50%; left: 50%; width: 25%; aspect-ratio: 1; border: 2px solid rgba(255, 255, 255, 0.8); border-radius: 50%; transform: translate(-50%, -50%); }
+.pitch-box { position: absolute; top: 24%; width: 14%; height: 52%; border: 2px solid rgba(255, 255, 255, 0.8); }
+.pitch-box-left { left: 0; border-left: 0; }
+.pitch-box-right { right: 0; border-right: 0; }
+#live-pitch-players { position: absolute; inset: 0; }
+.pitch-player { position: absolute; z-index: 2; width: 56px; transform: translate(-50%, -50%); transition: left 1.65s cubic-bezier(.2,.8,.2,1), top 1.65s cubic-bezier(.2,.8,.2,1), filter .25s, transform .25s; text-align: center; pointer-events: none; }
+.pitch-player.is-active { z-index: 4; transform: translate(-50%, -50%) scale(1.15); filter: drop-shadow(0 0 10px #ffd166); }
+.pitch-player img { display: block; width: 38px; height: 38px; object-fit: cover; margin: 0 auto 2px; border: 3px solid var(--team-colour); border-radius: 50%; background: #1e293b; }
+.pitch-player span { display: inline-block; max-width: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 4px; border-radius: 4px; background: rgba(15, 23, 42, 0.84); color: #ffffff; font-size: 0.67rem; font-weight: 700; }
+.live-ball { position: absolute; z-index: 3; width: 14px; height: 14px; left: 50%; top: 50%; border: 2px solid #0f172a; border-radius: 50%; background: radial-gradient(circle at 32% 28%, #ffffff 0 24%, #111827 25% 39%, #f8fafc 40% 100%); transform: translate(-50%, -50%); transition: left 1.45s cubic-bezier(.2,.8,.2,1), top 1.45s cubic-bezier(.2,.8,.2,1); box-shadow: 0 1px 5px rgba(0,0,0,.55); }
+.live-commentary-feed { max-width: none; height: auto; min-height: 320px; max-height: 420px; margin: 0; }
 .commentary-line { padding: 8px 10px; border-bottom: 1px solid #1e293b; color: #cbd5e1; animation: commentary-in 0.25s ease-out; }
 .commentary-line strong { color: #ffd166; margin-right: 8px; }
 .commentary-line.goal { border-left: 3px solid #4ade80; color: #f8fafc; }
@@ -171,6 +197,12 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 
 @media (max-width: 680px) {
     .transfer-actions, .stats-comparison-grid { grid-template-columns: 1fr; }
+    .power-card-options { grid-template-columns: 1fr; }
+    .live-match-layout { grid-template-columns: 1fr; }
+    .live-commentary-feed { min-height: 220px; height: 220px; }
+    .pitch-player { width: 46px; }
+    .pitch-player img { width: 31px; height: 31px; }
+    .pitch-player span { max-width: 52px; font-size: 0.58rem; }
     .game-layout { padding: 10px; }
     .bidding-area, .teams-sidebar { padding: 18px; }
 }

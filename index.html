@@ -52,6 +52,14 @@
         </div>
     </div>
 
+    <!-- PRE-GAME POWER CARD DRAFT -->
+    <div id="power-card-screen" class="container power-card-screen" style="display: none;">
+        <h1>Choose Your Game Plan</h1>
+        <p class="subtitle">Pick one card. Its advantage lasts for the whole tournament.</p>
+        <div id="power-card-options" class="power-card-options"></div>
+        <p id="power-card-status" class="power-card-status">Waiting for managers to choose…</p>
+    </div>
+
     <!-- GAME SCREEN -->
     <div id="game-screen" class="game-layout" style="display: none;">
         <div class="bidding-area">
@@ -139,7 +147,19 @@
             <h1 style="color: #ffd166;">LIVE MATCH IN PROGRESS</h1>
             <h2 id="loading-countdown" style="margin-top: 12px; font-size: 1.4rem; color: #4cc9f0;">Preparing the fixture...</h2>
             <p id="live-match-score" class="subtitle">0' — Kick-off is moments away.</p>
-            <div id="commentary-feed" class="commentary-feed" aria-live="polite"></div>
+            <div class="live-match-layout">
+                <div class="live-pitch-shell">
+                    <div id="live-pitch" class="live-pitch" aria-label="Live tactical pitch">
+                        <div class="pitch-centre-circle"></div>
+                        <div class="pitch-halfway-line"></div>
+                        <div class="pitch-box pitch-box-left"></div>
+                        <div class="pitch-box pitch-box-right"></div>
+                        <div id="live-ball" class="live-ball" aria-hidden="true"></div>
+                        <div id="live-pitch-players"></div>
+                    </div>
+                </div>
+                <div id="commentary-feed" class="commentary-feed live-commentary-feed" aria-live="polite"></div>
+            </div>
         </div>
 
         <!-- Phase 4: Tournament Results -->
@@ -166,7 +186,7 @@
         </div>
     </div>
 
-    <script src="players.js?v=20260818-1"></script>
-    <script src="script.js?v=20260818-1"></script>
+    <script src="players.js?v=20260818-3"></script>
+    <script src="script.js?v=20260818-3"></script>
 </body>
 </html>

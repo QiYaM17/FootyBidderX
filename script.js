@@ -31,6 +31,19 @@ const POSITION_GROUPS = {
     CDM: "MID", CM: "MID", CAM: "MID", LM: "MID", RM: "MID",
     LW: "ATT", RW: "ATT", ST: "ATT"
 };
+const POWER_CARD_POOL = [
+    { id: "clock-master", phase: "Bidding", name: "Clock Master", description: "Your successful bids reset the auction clock to 7 seconds instead of 5.", effects: { bidTimerBonus: 2 } },
+    { id: "bargain-hunter", phase: "Bidding", name: "Bargain Hunter", description: "Pay 10% less whenever you win an auction.", effects: { purchaseDiscount: 0.10 } },
+    { id: "market-negotiator", phase: "Transfers", name: "Market Negotiator", description: "The AI is much more willing to accept your swap offers.", effects: { aiTradeAcceptanceBonus: 10 } },
+    { id: "trade-magnet", phase: "Transfers", name: "Trade Magnet", description: "The AI is more likely to approach you with a swap offer.", effects: { aiTradeInterest: 3 } },
+    { id: "formation-maestro", phase: "Tactics", name: "Formation Maestro", description: "A balanced formation gives an extra team-rating boost.", effects: { formationBonus: 0.05 } },
+    { id: "chemistry-catalyst", phase: "Tactics", name: "Chemistry Catalyst", description: "Chemistry links have a stronger impact on your team.", effects: { chemistryBonus: 0.04 } },
+    { id: "positional-expert", phase: "Tactics", name: "Positional Expert", description: "Out-of-position players suffer a smaller penalty.", effects: { positionRecovery: 0.10 } },
+    { id: "pressing-plan", phase: "Tactics", name: "Pressing Plan", description: "Gain more control of the ball and make more tackles.", effects: { controlBonus: 0.10, tackleBonus: 0.14 } },
+    { id: "counter-attack", phase: "Tactics", name: "Counter Attack", description: "Create 10% more expected goals from your attacks.", effects: { xgBonus: 0.10 } },
+    { id: "defensive-drill", phase: "Tactics", name: "Defensive Drill", description: "Improve defensive security, especially without a goalkeeper.", effects: { defenceBonus: 0.12, noGoalkeeperCover: 0.18 } },
+    { id: "set-piece-specialists", phase: "Tactics", name: "Set-Piece Specialists", description: "A small extra expected-goals boost from dead-ball situations.", effects: { xgBonus: 0.07, chemistryBonus: 0.01 } }
+];
 
 // Tactics & Simulation State
 let tacticsTimerInterval;
@@ -47,11 +60,17 @@ let tournamentResults = [];
 let selectedTournamentMatchIndex = 0;
 let liveCommentaryInterval;
 let aiBidInterval;
+let livePitchState = { possessionTeam: null, ballX: 50, ballY: 50 };
+let powerCardDrafts = {};
+let powerCardPhaseActive = false;
+let powerCardStartScheduled = false;
+const LIVE_EVENT_INTERVAL_MS = 2600;
 
 // --- 2. DOM ELEMENTS ---
 const menuScreen = document.getElementById('menu-screen');
 const gameScreen = document.getElementById('game-screen');
 const endScreen = document.getElementById('end-screen');
+const powerCardScreen = document.getElementById('power-card-screen');
 const usernameInput = document.getElementById('username');
 const teamColourInput = document.getElementById('team-colour');
 
@@ -105,7 +124,7 @@ function startAiGame() {
     };
     menuScreen.style.display = 'none';
     gameScreen.style.display = 'flex';
-    startNextRound();
+    startPowerCardDraft();
 }
 
 // --- 4. HOST MULTIPLAYER LOGIC ---
@@ -170,6 +189,8 @@ function setupHost() {
                 respondToTrade(connectionOwners.get(conn), data.offerId, data.accepted);
             } else if (data.type === 'READY_FOR_TACTICS') {
                 markReadyForTactics(connectionOwners.get(conn));
+            } else if (data.type === 'SELECT_POWER_CARD') {
+                selectPowerCard(connectionOwners.get(conn), data.cardId);
             }
         });
     });
@@ -190,7 +211,7 @@ document.getElementById('startGameBtn').addEventListener('click', () => {
         return;
     }
     matchHasStarted = true;
-    startNextRound();
+    startPowerCardDraft();
 });
 
 // --- 5. CLIENT JOIN LOGIC ---
@@ -213,6 +234,8 @@ document.getElementById('connectBtn').addEventListener('click', () => {
         connectionToHost.on('data', (data) => {
             if (data.type === 'UPDATE_STATE') {
                 syncGameState(data.state);
+            } else if (data.type === 'START_POWER_CARD_DRAFT' || data.type === 'POWER_CARD_STATE') {
+                initPowerCardDraft(data.drafts, data.rosters);
             } else if (data.type === 'START_TACTICS') {
                 initTacticsPhase(data.rosters);
             } else if (data.type === 'START_TRANSFER') {
@@ -220,7 +243,7 @@ document.getElementById('connectBtn').addEventListener('click', () => {
             } else if (data.type === 'TRANSFER_STATE') {
                 syncTransferState(data.state);
             } else if (data.type === 'START_MATCH') {
-                showLoadingScreen(data.fixture, data.fixtureIndex, data.totalFixtures);
+                showLoadingScreen(data.fixture, data.fixtureIndex, data.totalFixtures, data.lineups, data.teamColours);
             } else if (data.type === 'COMMENTARY_EVENT') {
                 appendCommentaryEvent(data.event);
             } else if (data.type === 'MATCH_FINISHED') {
@@ -234,6 +257,102 @@ document.getElementById('connectBtn').addEventListener('click', () => {
     });
 });
 
+// --- 6. PRE-GAME POWER CARD DRAFT ---
+function startPowerCardDraft() {
+    powerCardPhaseActive = true;
+    powerCardStartScheduled = false;
+    powerCardDrafts = {};
+    Object.entries(gameRosters).forEach(([name, roster]) => {
+        roster.powerCard = null;
+        powerCardDrafts[name] = drawPowerCards(3);
+    });
+    broadcastPowerCardState('START_POWER_CARD_DRAFT');
+
+    if (aiMode) {
+        setTimeout(() => {
+            const aiOptions = powerCardDrafts[AI_TEAM_NAME] || [];
+            const selected = chooseAiPowerCard(aiOptions);
+            if (selected) selectPowerCard(AI_TEAM_NAME, selected.id);
+        }, 700);
+    }
+}
+
+function drawPowerCards(count) {
+    return [...POWER_CARD_POOL]
+        .sort(() => Math.random() - 0.5)
+        .slice(0, count);
+}
+
+function chooseAiPowerCard(options) {
+    const priorities = {
+        "formation-maestro": 7,
+        "chemistry-catalyst": 6,
+        "defensive-drill": 6,
+        "counter-attack": 5,
+        "bargain-hunter": 4,
+        "clock-master": 3
+    };
+    return [...options].sort((first, second) => (priorities[second.id] || 2) - (priorities[first.id] || 2) + (Math.random() - 0.5))[0];
+}
+
+function getPowerCard(teamName) {
+    const cardId = gameRosters[teamName]?.powerCard;
+    return POWER_CARD_POOL.find(card => card.id === cardId) || null;
+}
+
+function getPowerCardEffects(teamName) {
+    return getPowerCard(teamName)?.effects || {};
+}
+
+function broadcastPowerCardState(type) {
+    const payload = { type, drafts: powerCardDrafts, rosters: gameRosters };
+    hostConnections.forEach(conn => conn.send(payload));
+    initPowerCardDraft(powerCardDrafts, gameRosters);
+}
+
+function initPowerCardDraft(drafts, rosters) {
+    powerCardDrafts = drafts || {};
+    gameRosters = rosters || gameRosters;
+    menuScreen.style.display = 'none';
+    gameScreen.style.display = 'none';
+    endScreen.style.display = 'none';
+    powerCardScreen.style.display = 'block';
+
+    const options = powerCardDrafts[myName] || [];
+    const selectedId = gameRosters[myName]?.powerCard;
+    document.getElementById('power-card-options').innerHTML = options.map(card => `
+        <button class="power-card" type="button" onclick="selectPowerCardOption('${card.id}')" ${selectedId ? 'disabled' : ''}>
+            <span class="card-phase">${card.phase} advantage</span>
+            <h3>${card.name}</h3>
+            <p>${card.description}</p>
+        </button>
+    `).join('');
+    const selectedCount = Object.values(gameRosters).filter(roster => roster.powerCard).length;
+    const selectedCard = getPowerCard(myName);
+    document.getElementById('power-card-status').innerText = selectedCard
+        ? `Selected: ${selectedCard.name}. Waiting for the other managers… (${selectedCount}/${Object.keys(gameRosters).length})`
+        : `Choose one card to lock in your game plan. (${selectedCount}/${Object.keys(gameRosters).length} managers ready)`;
+}
+
+function selectPowerCardOption(cardId) {
+    if (isHost) selectPowerCard(myName, cardId);
+    else connectionToHost?.send({ type: 'SELECT_POWER_CARD', cardId });
+}
+
+function selectPowerCard(playerName, cardId) {
+    if (!powerCardPhaseActive || !gameRosters[playerName] || gameRosters[playerName].powerCard) return;
+    const isOffered = (powerCardDrafts[playerName] || []).some(card => card.id === cardId);
+    if (!isOffered) return;
+    gameRosters[playerName].powerCard = cardId;
+    broadcastPowerCardState('POWER_CARD_STATE');
+
+    if (Object.values(gameRosters).every(roster => roster.powerCard) && !powerCardStartScheduled) {
+        powerCardStartScheduled = true;
+        powerCardPhaseActive = false;
+        setTimeout(startNextRound, 700);
+    }
+}
+
 // --- 6. GAME LOOP LOGIC (HOST ONLY) ---
 function startNextRound() {
     if (availablePlayers.length === 0 || checkEndGameCondition()) {
@@ -241,7 +360,15 @@ function startNextRound() {
         return;
     }
 
-    const randomIndex = Math.floor(Math.random() * availablePlayers.length);
+    const affordableIndexes = availablePlayers
+        .map((player, index) => ({ player, index }))
+        .filter(({ player }) => Object.values(gameRosters).some(roster => canRosterBuyPlayer(roster, player)))
+        .map(({ index }) => index);
+    if (!affordableIndexes.length) {
+        endGame();
+        return;
+    }
+    const randomIndex = affordableIndexes[Math.floor(Math.random() * affordableIndexes.length)];
     currentCard = availablePlayers.splice(randomIndex, 1)[0];
     currentBid = currentCard.basePrice;
     highestBidder = "None";
@@ -258,7 +385,7 @@ function processBid(proposedBid, bidderName) {
     if (proposedBid > currentBid && proposedBid <= bidderData.money && bidderData.squad.length < MAX_SQUAD_SIZE) {
         currentBid = proposedBid;
         highestBidder = bidderName;
-        timeLeft = POST_BID_TIMER;
+        timeLeft = POST_BID_TIMER + (getPowerCardEffects(bidderName).bidTimerBonus || 0);
         broadcastState();
     }
 }
@@ -295,14 +422,27 @@ function scheduleAiBids() {
 function sellPlayer() {
     clearInterval(aiBidInterval);
     if (highestBidder !== "None" && gameRosters[highestBidder]) {
-        gameRosters[highestBidder].money -= currentBid;
+        const discount = getPowerCardEffects(highestBidder).purchaseDiscount || 0;
+        const finalPrice = Math.ceil(currentBid * (1 - discount));
+        gameRosters[highestBidder].money -= finalPrice;
         gameRosters[highestBidder].squad.push(currentCard.name);
     }
     setTimeout(startNextRound, 2000);
 }
 
+function canRosterBuyPlayer(roster, player) {
+    if (!roster || !player) return false;
+    return roster.squad.length < MAX_SQUAD_SIZE && roster.money > player.basePrice;
+}
+
+function canRosterBuyAnyPlayer(roster) {
+    return availablePlayers.some(player => canRosterBuyPlayer(roster, player));
+}
+
 function checkEndGameCondition() {
-    return Object.values(gameRosters).every(roster => roster.squad.length >= MAX_SQUAD_SIZE);
+    const teams = Object.values(gameRosters);
+    if (!teams.length) return true;
+    return teams.every(roster => roster.squad.length >= MAX_SQUAD_SIZE || !canRosterBuyAnyPlayer(roster));
 }
 
 function endGame() {
@@ -335,6 +475,7 @@ function broadcastState() {
 // --- 7. UI BIDDING UPDATES ---
 function syncGameState(state) {
     menuScreen.style.display = 'none';
+    powerCardScreen.style.display = 'none';
     gameScreen.style.display = 'flex';
 
     if (state.card) {
@@ -370,6 +511,7 @@ function syncGameState(state) {
         teamsList.innerHTML += `
             <div class="team-block" style="border-left: 4px solid ${data.teamColour || '#4cc9f0'};">
                 <h4><span><i class="team-colour-dot" style="background:${data.teamColour || '#4cc9f0'}"></i>${name}</span> <span>${data.squad.length}/${MAX_SQUAD_SIZE} players · £${data.money}M</span></h4>
+                <p class="power-card-label">${getPowerCard(name)?.name || 'Choosing game plan…'}</p>
                 <ul>${playersHtml || "<li>No players yet</li>"}</ul>
             </div>
         `;
@@ -495,7 +637,8 @@ function createTradeOffer({ name, targetTeam, myPlayer, theirPlayer }) {
     if (aiMode && targetTeam === AI_TEAM_NAME) {
         const aiValue = playersData.find(player => player.name === theirPlayer)?.overall || 50;
         const offeredValue = playersData.find(player => player.name === myPlayer)?.overall || 50;
-        const accepted = offeredValue + 5 >= aiValue || Math.random() < 0.28;
+        const negotiationBonus = getPowerCardEffects(name).aiTradeAcceptanceBonus || 0;
+        const accepted = offeredValue + 5 + negotiationBonus >= aiValue || Math.random() < 0.28;
         setTimeout(() => {
             const offer = pendingTradeOffers.find(item => item.from === name && item.to === AI_TEAM_NAME && item.theirPlayer === myPlayer && item.myPlayer === theirPlayer);
             if (offer) respondToTrade(AI_TEAM_NAME, offer.id, accepted);
@@ -532,7 +675,9 @@ function scheduleAiTrades() {
         const targets = Object.keys(gameRosters).filter(name => name !== AI_TEAM_NAME && gameRosters[name].squad.length);
         if (!aiRoster?.squad.length || !targets.length || Math.random() > 0.62) return;
 
-        const targetTeam = targets[Math.floor(Math.random() * targets.length)];
+        const targetTeam = targets.sort((first, second) =>
+            (getPowerCardEffects(second).aiTradeInterest || 0) - (getPowerCardEffects(first).aiTradeInterest || 0) || Math.random() - 0.5
+        )[0];
         const targetRoster = gameRosters[targetTeam];
         if (pendingTradeOffers.some(offer => offer.from === AI_TEAM_NAME && offer.to === targetTeam)) return;
 
@@ -728,9 +873,17 @@ function runTournamentFixture(index) {
     const matchPayload = runMatchSimulationEngine(fixture.team1Name, fixture.team2Name);
     const timeline = buildMatchTimeline(matchPayload);
     matchPayload.commentary = timeline;
-    const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures: tournamentFixtures.length };
+    const lineups = {
+        [fixture.team1Name]: matchPayload.team1Stats.players,
+        [fixture.team2Name]: matchPayload.team2Stats.players
+    };
+    const teamColours = {
+        [fixture.team1Name]: gameRosters[fixture.team1Name]?.teamColour || '#4cc9f0',
+        [fixture.team2Name]: gameRosters[fixture.team2Name]?.teamColour || '#f72585'
+    };
+    const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures: tournamentFixtures.length, lineups, teamColours };
     hostConnections.forEach(conn => conn.send(startMessage));
-    showLoadingScreen(fixture, index, tournamentFixtures.length);
+    showLoadingScreen(fixture, index, tournamentFixtures.length, lineups, teamColours);
 
     let timelineIndex = 0;
     clearInterval(liveCommentaryInterval);
@@ -747,10 +900,10 @@ function runTournamentFixture(index) {
         hostConnections.forEach(conn => conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }));
         updateTournamentView(tournamentResults, matchPayload);
         setTimeout(() => runTournamentFixture(index + 1), 1200);
-    }, 1750);
+    }, LIVE_EVENT_INTERVAL_MS);
 }
 
-function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1) {
+function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1, lineups = {}, teamColours = {}) {
     document.getElementById('transfer-phase').style.display = 'none';
     document.getElementById('tactics-phase').style.display = 'none';
     document.getElementById('loading-phase').style.display = 'block';
@@ -758,6 +911,7 @@ function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1) {
     document.getElementById('loading-countdown').innerText = `Match ${fixtureIndex + 1} of ${totalFixtures}: ${fixture.team1Name} vs ${fixture.team2Name}`;
     document.getElementById('live-match-score').innerText = `0' — ${fixture.team1Name} 0 - 0 ${fixture.team2Name}`;
     document.getElementById('commentary-feed').innerHTML = '';
+    renderLivePitch(fixture, lineups, teamColours);
 }
 
 function appendCommentaryEvent(event, feedId = 'commentary-feed') {
@@ -770,6 +924,152 @@ function appendCommentaryEvent(event, feedId = 'commentary-feed') {
     feed.appendChild(line);
     feed.scrollTop = feed.scrollHeight;
     if (event.score) document.getElementById('live-match-score').innerText = `${event.minute}' — ${event.score}`;
+    if (feedId === 'commentary-feed') animateLivePitchEvent(event);
+}
+
+function renderLivePitch(fixture, lineups, teamColours) {
+    const playerLayer = document.getElementById('live-pitch-players');
+    const ball = document.getElementById('live-ball');
+    if (!playerLayer || !ball) return;
+    playerLayer.innerHTML = '';
+    livePitchState = { possessionTeam: null, ballX: 50, ballY: 50 };
+    ball.style.left = '50%';
+    ball.style.top = '50%';
+
+    const teams = [fixture.team1Name, fixture.team2Name];
+    teams.forEach((teamName, teamIndex) => {
+        const players = lineups[teamName] || [];
+        const groupTotals = players.reduce((totals, player) => {
+            const group = POSITION_GROUPS[player.pos] || 'MID';
+            totals[group] = (totals[group] || 0) + 1;
+            return totals;
+        }, {});
+        const groupIndexes = {};
+        players.forEach(player => {
+            const group = POSITION_GROUPS[player.pos] || 'MID';
+            groupIndexes[group] = (groupIndexes[group] || 0) + 1;
+            const coordinate = getPitchCoordinate(group, groupIndexes[group], groupTotals[group], teamIndex === 0);
+            const marker = document.createElement('div');
+            marker.className = 'pitch-player';
+            marker.dataset.player = player.name;
+            marker.dataset.team = teamName;
+            marker.dataset.side = teamIndex === 0 ? 'home' : 'away';
+            marker.style.setProperty('--team-colour', teamColours[teamName] || '#4cc9f0');
+            marker.style.left = `${coordinate.x}%`;
+            marker.style.top = `${coordinate.y}%`;
+            marker.dataset.homeX = coordinate.x;
+            marker.dataset.homeY = coordinate.y;
+            marker.innerHTML = `<img src="photocards/${player.name}PhotoCard.png" alt="${player.name}" onerror="this.onerror=null;this.src='https://placehold.co/64x64/1e293b/ffffff?text=${encodeURIComponent(player.name.charAt(0))}';"><span>${player.name}</span>`;
+            playerLayer.appendChild(marker);
+        });
+    });
+}
+
+function getPitchCoordinate(group, index, totalInGroup, isHome) {
+    const homeColumns = { GK: 8, DEF: 25, MID: 45, ATT: 67 };
+    const baseX = homeColumns[group] || 45;
+    const x = isHome ? baseX : 100 - baseX;
+    const y = 16 + ((index / (totalInGroup + 1)) * 68);
+    return { x, y };
+}
+
+function animateLivePitchEvent(event) {
+    if (!event?.actor || !event.team) return;
+    const markers = Array.from(document.querySelectorAll('.pitch-player'));
+    const actor = markers.find(marker => marker.dataset.player === event.actor && marker.dataset.team === event.team);
+    if (!actor) return;
+
+    markers.forEach(marker => marker.classList.remove('is-active'));
+    actor.classList.add('is-active');
+    const isHome = actor.dataset.side === 'home';
+    const direction = isHome ? 1 : -1;
+    const currentX = parseFloat(actor.style.left) || 50;
+    const currentY = parseFloat(actor.style.top) || 50;
+    const teamChanged = livePitchState.possessionTeam && livePitchState.possessionTeam !== event.team;
+    const movementByKind = {
+        pass: 7,
+        shot: 10,
+        'set-piece': 6,
+        goal: 14,
+        foul: 4,
+        interception: 3,
+        card: 2
+    };
+    const actorStep = movementByKind[event.kind] ?? 4;
+    const actorTargetX = event.kind === 'goal'
+        ? (isHome ? 86 : 14)
+        : clampNumber(currentX + direction * actorStep, 6, 94);
+    const actorTargetY = clampNumber(currentY + (Math.random() * 12 - 6), 11, 89);
+    actor.style.left = `${actorTargetX}%`;
+    actor.style.top = `${actorTargetY}%`;
+
+    let targetX = actorTargetX;
+    let targetY = actorTargetY;
+    if (event.kind === 'shot') {
+        targetX = clampNumber(actorTargetX + direction * 12, 6, 94);
+        targetY = clampNumber(actorTargetY + (Math.random() * 8 - 4), 18, 82);
+    } else if (event.kind === 'goal') {
+        targetX = isHome ? 94 : 6;
+        targetY = 50;
+    } else if (event.kind === 'pass' && !teamChanged) {
+        const teammate = findNearbyTeammate(markers, actor, direction);
+        if (teammate) {
+            targetX = parseFloat(teammate.style.left) || actorTargetX;
+            targetY = parseFloat(teammate.style.top) || actorTargetY;
+        } else {
+            targetX = clampNumber(actorTargetX + direction * 9, 6, 94);
+        }
+    }
+    if (teamChanged && !['shot', 'goal'].includes(event.kind)) {
+        targetX = actorTargetX;
+        targetY = actorTargetY;
+    }
+    targetX = limitMovement(livePitchState.ballX, targetX, event.kind === 'goal' ? 28 : 18);
+    targetY = limitMovement(livePitchState.ballY, targetY, event.kind === 'goal' ? 22 : 14);
+
+    markers.filter(marker => marker !== actor).forEach(marker => {
+        const sameTeam = marker.dataset.team === event.team;
+        const markerX = parseFloat(marker.style.left) || 50;
+        const markerY = parseFloat(marker.style.top) || 50;
+        const homeX = parseFloat(marker.dataset.homeX) || markerX;
+        const homeY = parseFloat(marker.dataset.homeY) || markerY;
+        const shapeX = limitMovement(markerX, homeX, 4);
+        const shapeY = limitMovement(markerY, homeY, 4);
+        const supportShift = sameTeam ? direction * 2.5 : direction * -1.8;
+        marker.style.left = `${clampNumber(shapeX + supportShift, 4, 96)}%`;
+        marker.style.top = `${clampNumber(shapeY + (Math.random() * 4 - 2), 9, 91)}%`;
+    });
+
+    const ball = document.getElementById('live-ball');
+    if (ball) {
+        ball.style.left = `${targetX}%`;
+        ball.style.top = `${targetY}%`;
+    }
+    livePitchState = { possessionTeam: event.team, ballX: targetX, ballY: targetY };
+}
+
+function findNearbyTeammate(markers, actor, direction) {
+    const actorX = parseFloat(actor.style.left) || 50;
+    const actorY = parseFloat(actor.style.top) || 50;
+    return markers
+        .filter(marker => marker !== actor && marker.dataset.team === actor.dataset.team)
+        .map(marker => {
+            const x = parseFloat(marker.style.left) || 50;
+            const y = parseFloat(marker.style.top) || 50;
+            const isForward = direction > 0 ? x >= actorX - 3 : x <= actorX + 3;
+            const distance = Math.abs(x - actorX) + Math.abs(y - actorY);
+            return { marker, score: distance + (isForward ? 0 : 18) };
+        })
+        .sort((first, second) => first.score - second.score)[0]?.marker;
+}
+
+function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function limitMovement(from, to, maxStep) {
+    if (Math.abs(to - from) <= maxStep) return to;
+    return from + Math.sign(to - from) * maxStep;
 }
 
 function renderFinalCommentary(match) {
@@ -780,6 +1080,7 @@ function renderFinalCommentary(match) {
 
 function calculateTeamMetrics(teamName, tacticsMap) {
     const squadNames = gameRosters[teamName] ? gameRosters[teamName].squad : ["Dummy1", "Dummy2", "Dummy3", "Dummy4", "Dummy5"];
+    const cardEffects = getPowerCardEffects(teamName);
     let totalPace = 0, totalShooting = 0, totalPassing = 0, totalDribbling = 0, totalDefence = 0, totalPhysical = 0;
     const squadSize = squadNames.length;
     // A missing player is a real competitive disadvantage: shape, work rate and cover all suffer.
@@ -793,17 +1094,17 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const groups = assigned.map(item => POSITION_GROUPS[item.pos]).filter(Boolean);
     const has = group => groups.includes(group);
     const structureScore = (has("GK") ? 0.25 : 0) + (has("DEF") ? 0.25 : 0) + (has("MID") ? 0.25 : 0) + (has("ATT") ? 0.25 : 0);
-    const formationBonus = squadSize >= 4 ? structureScore * 0.05 : structureScore * 0.02;
+    const formationBonus = (squadSize >= 4 ? structureScore * 0.05 : structureScore * 0.02) + (cardEffects.formationBonus || 0);
     const chemistryPairs = assigned.reduce((total, item, index) => total + assigned.slice(index + 1).filter(other => item.player.chemistryWith?.includes(other.name) || other.player.chemistryWith?.includes(item.name)).length, 0);
     const possiblePairs = Math.max(1, (squadSize * (squadSize - 1)) / 2);
     const chemistryScore = chemistryPairs / possiblePairs;
-    const chemistryBonus = chemistryScore * 0.04;
+    const chemistryBonus = (chemistryScore * 0.04) + (cardEffects.chemistryBonus || 0);
     const formation = `${groups.filter(group => group === "GK").length}-${groups.filter(group => group === "DEF").length}-${groups.filter(group => group === "MID").length}-${groups.filter(group => group === "ATT").length}`;
     let totalAdjustedRating = 0;
 
     assigned.forEach(({ name, player: p, pos: assignedPos }) => {
         const isPreferred = p.positions?.includes(assignedPos);
-        const positionModifier = isPreferred ? 1 : (p.positions?.some(pos => POSITION_GROUPS[pos] === POSITION_GROUPS[assignedPos]) ? 0.92 : 0.78);
+        const positionModifier = isPreferred ? 1 : Math.min(1, p.positions?.some(pos => POSITION_GROUPS[pos] === POSITION_GROUPS[assignedPos]) ? 0.92 + (cardEffects.positionRecovery || 0) : 0.78 + (cardEffects.positionRecovery || 0));
         const adjustedModifier = positionModifier * squadFactor * (1 + formationBonus + chemistryBonus * 0.35);
 
         totalPace += p.pace * adjustedModifier;
@@ -847,17 +1148,17 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const averageRating = totalAdjustedRating / count;
     const teamCoverageRating = 0.52 + (0.48 * squadRatio);
     const rating = squadSize ? clampOverall(averageRating * teamCoverageRating * (1 + formationBonus + chemistryBonus * 0.35)) : 0;
-    const xG = squadSize ? parseFloat(Math.max(0.08, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * activityFactor * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2)) : 0;
-    const controlPower = ((avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5)) * controlFactor;
+    const xG = squadSize ? parseFloat(Math.max(0.08, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * activityFactor * (1 + formationBonus + chemistryBonus) * (1 + (cardEffects.xgBonus || 0)) * noise())).toFixed(2)) : 0;
+    const controlPower = ((avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5)) * controlFactor * (1 + (cardEffects.controlBonus || 0));
     const chances = squadSize ? Math.max(1, Math.round((((avgPassing * 0.25) + (avgDribbling * 0.2)) * activityFactor) * noise())) : 0;
     const passes = squadSize ? Math.max(45, Math.round((((avgPassing * 7.5) + (avgPace * 2.0)) * activityFactor) * noise())) : 0;
-    const tackles = squadSize ? Math.max(3, Math.round((((avgDefence * 0.45) + (avgPhysical * 0.35)) * activityFactor) * noise())) : 0;
+    const tackles = squadSize ? Math.max(3, Math.round((((avgDefence * 0.45) + (avgPhysical * 0.35)) * activityFactor * (1 + (cardEffects.tackleBonus || 0))) * noise())) : 0;
 
     const hasGoalkeeper = has("GK");
-    const goalkeeperFactor = hasGoalkeeper ? 1 : 0.56;
-    const defensiveSecurity = avgDefence * squadFactor * goalkeeperFactor * (0.92 + (structureScore * 0.08));
+    const goalkeeperFactor = hasGoalkeeper ? 1 : 0.56 + (cardEffects.noGoalkeeperCover || 0);
+    const defensiveSecurity = avgDefence * squadFactor * goalkeeperFactor * (0.92 + (structureScore * 0.08)) * (1 + (cardEffects.defenceBonus || 0));
 
-    return { rating, xG, chances, passes, tackles, controlPower, defensiveSecurity, hasGoalkeeper, goalkeeperFactor, players: playersInfo, squadSize, squadFactor, squadRatio, activityFactor, formationBonus, chemistryBonus, chemistryPairs, structureScore, formation };
+    return { rating, xG, chances, passes, tackles, controlPower, defensiveSecurity, hasGoalkeeper, goalkeeperFactor, powerCard: getPowerCard(teamName), players: playersInfo, squadSize, squadFactor, squadRatio, activityFactor, formationBonus, chemistryBonus, chemistryPairs, structureScore, formation };
 }
 
 function runMatchSimulationEngine(team1Name, team2Name) {
@@ -935,20 +1236,41 @@ function buildMatchTimeline(match) {
     const randomPlayer = (teamStats, preferredGroup) => {
         const matching = teamStats.players.filter(player => !preferredGroup || POSITION_GROUPS[player.pos] === preferredGroup);
         const pool = matching.length ? matching : teamStats.players;
-        return pool[Math.floor(Math.random() * pool.length)]?.name || 'A player';
+        return pool[Math.floor(Math.random() * pool.length)] || { name: 'A player', pos: 'CM' };
     };
     const side = () => Math.random() < 0.5
         ? { name: match.team1Name, stats: match.team1Stats }
         : { name: match.team2Name, stats: match.team2Stats };
     const standardMinutes = [1, 5, 9, 15, 21, 28, 34, 41, 48, 55, 62, 69, 75, 82, 87];
     const eventFactories = [
-        selected => ({ kind: '', text: `${randomPlayer(selected.stats, 'MID')} keeps the move flowing with a sharp pass for ${selected.name}.` }),
-        selected => ({ kind: '', text: `${randomPlayer(selected.stats, 'DEF')} makes a crucial interception for ${selected.name}!` }),
-        selected => ({ kind: 'foul', text: `${randomPlayer(selected.stats)} is fouled as ${selected.name} try to break forward.` }),
-        selected => ({ kind: 'set-piece', text: `${selected.name} have a free kick; ${randomPlayer(selected.stats, 'MID')} bends it narrowly over.` }),
-        selected => ({ kind: 'shot', text: `${randomPlayer(selected.stats, 'ATT')} gets a shot away for ${selected.name}, but it is saved.` }),
-        selected => ({ kind: 'set-piece', text: `Penalty appeal for ${selected.name}! The referee waves play on after a strong challenge.` }),
-        selected => ({ kind: '', text: `${randomPlayer(selected.stats, 'DEF')} wins the ball back cleanly for ${selected.name}.` })
+        selected => {
+            const actor = randomPlayer(selected.stats, 'MID');
+            return { kind: 'pass', team: selected.name, actor: actor.name, text: `${actor.name} keeps the move flowing with a sharp pass for ${selected.name}.` };
+        },
+        selected => {
+            const actor = randomPlayer(selected.stats, 'DEF');
+            return { kind: 'interception', team: selected.name, actor: actor.name, text: `${actor.name} makes a crucial interception for ${selected.name}!` };
+        },
+        selected => {
+            const actor = randomPlayer(selected.stats);
+            return { kind: 'foul', team: selected.name, actor: actor.name, text: `${actor.name} is fouled as ${selected.name} try to break forward.` };
+        },
+        selected => {
+            const actor = randomPlayer(selected.stats, 'MID');
+            return { kind: 'set-piece', team: selected.name, actor: actor.name, text: `${selected.name} have a free kick; ${actor.name} bends it narrowly over.` };
+        },
+        selected => {
+            const actor = randomPlayer(selected.stats, 'ATT');
+            return { kind: 'shot', team: selected.name, actor: actor.name, text: `${actor.name} gets a shot away for ${selected.name}, but it is saved.` };
+        },
+        selected => {
+            const actor = randomPlayer(selected.stats, 'ATT');
+            return { kind: 'set-piece', team: selected.name, actor: actor.name, text: `Penalty appeal for ${selected.name}! ${actor.name} goes down under a strong challenge.` };
+        },
+        selected => {
+            const actor = randomPlayer(selected.stats, 'DEF');
+            return { kind: 'interception', team: selected.name, actor: actor.name, text: `${actor.name} wins the ball back cleanly for ${selected.name}.` };
+        }
     ];
     const timeline = standardMinutes.map((minute, index) => {
         const selected = side();
@@ -966,6 +1288,9 @@ function buildMatchTimeline(match) {
         timeline.push({
             minute: goal.minute,
             kind: 'goal',
+            team: goal.team,
+            actor: goal.scorer,
+            assist: goal.assist,
             text: `GOAL! ${goal.scorer} scores a ${goal.type.toLowerCase()} for ${goal.team}.${assistText}`,
             score: `${match.team1Name} ${score1} - ${score2} ${match.team2Name}`
         });
