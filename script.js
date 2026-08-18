@@ -6,6 +6,8 @@ let connectionOwners = new Map();
 let isHost = false;
 let myName = "";
 let matchHasStarted = false;
+let aiMode = false;
+const AI_TEAM_NAME = "AI Manager";
 
 // Host-managed state
 let availablePlayers = [...playersData];
@@ -14,13 +16,13 @@ let currentCard = null;
 let currentBid = 0;
 let highestBidder = "None";
 let bidTimerInterval;
-let timeLeft = 3;
-const INITIAL_TIMER = 3;
-const POST_BID_TIMER = 3;
+let timeLeft = 5;
+const INITIAL_TIMER = 5;
+const POST_BID_TIMER = 5;
 const STARTING_BUDGET = 500;
 const MAX_SQUAD_SIZE = 5;
 const MAX_LOBBY_PLAYERS = 3;
-const TRANSFER_DURATION = 25;
+const TRANSFER_DURATION = 20;
 const TEAM_COLOURS = ["#4cc9f0", "#f72585", "#ffd166"];
 const MAX_MATCH_OVR = 110;
 const MAX_BASE_MATCH_OVR = 110;
@@ -43,6 +45,7 @@ let tournamentFixtures = [];
 let tournamentResults = [];
 let selectedTournamentMatchIndex = 0;
 let liveCommentaryInterval;
+let aiBidInterval;
 
 // --- 2. DOM ELEMENTS ---
 const menuScreen = document.getElementById('menu-screen');
@@ -77,9 +80,37 @@ document.getElementById('joinBtn').addEventListener('click', () => {
     document.getElementById('joinPanel').classList.add('active');
 });
 
+document.getElementById('aiGameBtn').addEventListener('click', () => {
+    myName = usernameInput.value.trim();
+    if (!myName) {
+        showCustomAlert("Please enter a display name first!");
+        return;
+    }
+    if (myName.toLowerCase() === AI_TEAM_NAME.toLowerCase()) {
+        showCustomAlert("Please choose a different name from the AI manager.");
+        return;
+    }
+    startAiGame();
+});
+
+function startAiGame() {
+    isHost = true;
+    aiMode = true;
+    matchHasStarted = true;
+    availablePlayers = [...playersData];
+    gameRosters = {
+        [myName]: { money: STARTING_BUDGET, squad: [], teamColour: getAvailableTeamColour(teamColourInput.value) },
+        [AI_TEAM_NAME]: { money: STARTING_BUDGET, squad: [], teamColour: getAvailableTeamColour('#f72585') }
+    };
+    menuScreen.style.display = 'none';
+    gameScreen.style.display = 'flex';
+    startNextRound();
+}
+
 // --- 4. HOST MULTIPLAYER LOGIC ---
 function setupHost() {
     isHost = true;
+    aiMode = false;
     const randomCode = Math.floor(10000 + Math.random() * 90000).toString();
     document.getElementById('lobbyCode').innerText = randomCode;
     
@@ -233,6 +264,8 @@ function processBid(proposedBid, bidderName) {
 
 function startTimer() {
     clearInterval(bidTimerInterval);
+    clearInterval(aiBidInterval);
+    if (aiMode) scheduleAiBids();
     bidTimerInterval = setInterval(() => {
         timeLeft--;
         broadcastState();
@@ -244,7 +277,22 @@ function startTimer() {
     }, 1000);
 }
 
+function scheduleAiBids() {
+    aiBidInterval = setInterval(() => {
+        const ai = gameRosters[AI_TEAM_NAME];
+        if (!ai || !currentCard || timeLeft <= 0 || ai.squad.length >= MAX_SQUAD_SIZE) return;
+        const valueScore = currentCard.overall + (currentCard.positions?.length || 1) * 2;
+        const maximumBid = Math.min(ai.money, Math.round(currentCard.basePrice + valueScore * 0.65));
+        if (highestBidder === AI_TEAM_NAME || currentBid >= maximumBid || Math.random() > 0.42) return;
+        const increments = [1, 5, 10];
+        const increment = increments[Math.floor(Math.random() * increments.length)];
+        const nextBid = Math.min(maximumBid, currentBid + increment);
+        if (nextBid > currentBid) processBid(nextBid, AI_TEAM_NAME);
+    }, 650);
+}
+
 function sellPlayer() {
+    clearInterval(aiBidInterval);
     if (highestBidder !== "None" && gameRosters[highestBidder]) {
         gameRosters[highestBidder].money -= currentBid;
         gameRosters[highestBidder].squad.push(currentCard.name);
@@ -332,7 +380,7 @@ function startTransferPhase() {
     transferPhaseActive = true;
     transferTimeLeft = TRANSFER_DURATION;
     pendingTradeOffers = [];
-    Object.values(gameRosters).forEach(roster => { roster.readyForTactics = false; });
+    Object.entries(gameRosters).forEach(([name, roster]) => { roster.readyForTactics = aiMode && name === AI_TEAM_NAME; });
     broadcastTransferState('START_TRANSFER');
     startTransferTimer();
 }
@@ -479,6 +527,18 @@ function beginTacticsPhase() {
     pendingTradeOffers = [];
     hostConnections.forEach(conn => conn.send({ type: 'START_TACTICS', rosters: gameRosters }));
     initTacticsPhase(gameRosters);
+    if (aiMode) handleClientTactics(AI_TEAM_NAME, buildAiTactics(gameRosters[AI_TEAM_NAME].squad));
+}
+
+function buildAiTactics(squad) {
+    const availablePositions = ["GK", "CB", "LB", "RB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "ST"];
+    const tactics = {};
+    squad.forEach((name, index) => {
+        const player = playersData.find(item => item.name === name);
+        const preferred = (player?.positions || []).find(position => !Object.values(tactics).includes(position));
+        tactics[name] = preferred || availablePositions.find(position => !Object.values(tactics).includes(position)) || availablePositions[index];
+    });
+    return tactics;
 }
 
 // --- 8. TACTICS PHASE ---
@@ -642,7 +702,7 @@ function runTournamentFixture(index) {
         hostConnections.forEach(conn => conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }));
         updateTournamentView(tournamentResults, matchPayload);
         setTimeout(() => runTournamentFixture(index + 1), 1200);
-    }, 1250);
+    }, 1750);
 }
 
 function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1) {
@@ -678,7 +738,7 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     let totalPace = 0, totalShooting = 0, totalPassing = 0, totalDribbling = 0, totalDefence = 0, totalPhysical = 0;
     const squadSize = squadNames.length;
     // A missing player is a real competitive disadvantage: shape, work rate and cover all suffer.
-    const squadFactor = 0.58 + (0.42 * Math.min(squadSize, MAX_SQUAD_SIZE) / MAX_SQUAD_SIZE);
+    const squadFactor = 0.76 + (0.24 * Math.min(squadSize, MAX_SQUAD_SIZE) / MAX_SQUAD_SIZE);
     const playersInfo = [];
     const assigned = squadNames.map(name => ({
         name,
@@ -688,18 +748,18 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const groups = assigned.map(item => POSITION_GROUPS[item.pos]).filter(Boolean);
     const has = group => groups.includes(group);
     const structureScore = (has("GK") ? 0.25 : 0) + (has("DEF") ? 0.25 : 0) + (has("MID") ? 0.25 : 0) + (has("ATT") ? 0.25 : 0);
-    const formationBonus = squadSize >= 4 ? structureScore * 0.10 : structureScore * 0.04;
+    const formationBonus = squadSize >= 4 ? structureScore * 0.05 : structureScore * 0.02;
     const chemistryPairs = assigned.reduce((total, item, index) => total + assigned.slice(index + 1).filter(other => item.player.chemistryWith?.includes(other.name) || other.player.chemistryWith?.includes(item.name)).length, 0);
     const possiblePairs = Math.max(1, (squadSize * (squadSize - 1)) / 2);
     const chemistryScore = chemistryPairs / possiblePairs;
-    const chemistryBonus = chemistryScore * 0.10;
+    const chemistryBonus = chemistryScore * 0.04;
     const formation = `${groups.filter(group => group === "GK").length}-${groups.filter(group => group === "DEF").length}-${groups.filter(group => group === "MID").length}-${groups.filter(group => group === "ATT").length}`;
     let totalAdjustedRating = 0;
 
     assigned.forEach(({ name, player: p, pos: assignedPos }) => {
         const isPreferred = p.positions?.includes(assignedPos);
         const positionModifier = isPreferred ? 1 : (p.positions?.some(pos => POSITION_GROUPS[pos] === POSITION_GROUPS[assignedPos]) ? 0.92 : 0.78);
-        const adjustedModifier = positionModifier * squadFactor * (1 + formationBonus + chemistryBonus * 0.65);
+        const adjustedModifier = positionModifier * squadFactor * (1 + formationBonus + chemistryBonus * 0.35);
 
         totalPace += p.pace * adjustedModifier;
         totalShooting += p.shooting * adjustedModifier;
@@ -723,6 +783,11 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     });
 
     const count = Math.max(1, squadNames.length);
+    const squadRatio = Math.min(squadSize, MAX_SQUAD_SIZE) / MAX_SQUAD_SIZE;
+    // A small squad cannot sustain the same attacking, passing or defensive workload
+    // as a full side, even when its average player quality is high.
+    const activityFactor = 0.30 + (0.70 * squadRatio);
+    const controlFactor = 0.28 + (0.72 * squadRatio);
     const avgPace = totalPace / count;
     const avgShooting = totalShooting / count;
     const avgPassing = totalPassing / count;
@@ -734,16 +799,20 @@ function calculateTeamMetrics(teamName, tacticsMap) {
     const noise = () => (Math.random() * 0.1) + 0.95; // Random multiplier between 0.95 and 1.05
     
     const attackQuality = (avgShooting * 0.55) + (avgDribbling * 0.20) + (avgPassing * 0.25);
-    const rating = squadSize ? clampOverall((totalAdjustedRating / count) * (1 + formationBonus + chemistryBonus)) : 0;
-    const xG = squadSize ? parseFloat(Math.max(0.12, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2)) : 0;
-    const controlPower = (avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5);
-    const chances = squadSize ? Math.max(1, Math.round(((avgPassing * 0.25) + (avgDribbling * 0.2)) * noise())) : 0;
-    const passes = squadSize ? Math.max(80, Math.round(((avgPassing * 7.5) + (avgPace * 2.0)) * noise())) : 0;
-    const tackles = squadSize ? Math.max(5, Math.round(((avgDefence * 0.45) + (avgPhysical * 0.35)) * noise())) : 0;
+    const averageRating = totalAdjustedRating / count;
+    const teamCoverageRating = 0.52 + (0.48 * squadRatio);
+    const rating = squadSize ? clampOverall(averageRating * teamCoverageRating * (1 + formationBonus + chemistryBonus * 0.35)) : 0;
+    const xG = squadSize ? parseFloat(Math.max(0.08, ((attackQuality / 65) * (0.55 + (0.45 * squadFactor)) * activityFactor * (1 + formationBonus + chemistryBonus) * noise())).toFixed(2)) : 0;
+    const controlPower = ((avgPassing * 1.5) + (avgDribbling * 1.2) + (avgPace * 0.5)) * controlFactor;
+    const chances = squadSize ? Math.max(1, Math.round((((avgPassing * 0.25) + (avgDribbling * 0.2)) * activityFactor) * noise())) : 0;
+    const passes = squadSize ? Math.max(45, Math.round((((avgPassing * 7.5) + (avgPace * 2.0)) * activityFactor) * noise())) : 0;
+    const tackles = squadSize ? Math.max(3, Math.round((((avgDefence * 0.45) + (avgPhysical * 0.35)) * activityFactor) * noise())) : 0;
 
-    const defensiveSecurity = avgDefence * (0.82 + (squadFactor * 0.18)) * (0.92 + (structureScore * 0.08));
+    const hasGoalkeeper = has("GK");
+    const goalkeeperFactor = hasGoalkeeper ? 1 : 0.56;
+    const defensiveSecurity = avgDefence * squadFactor * goalkeeperFactor * (0.92 + (structureScore * 0.08));
 
-    return { rating, xG, chances, passes, tackles, controlPower, defensiveSecurity, players: playersInfo, squadSize, squadFactor, formationBonus, chemistryBonus, chemistryPairs, structureScore, formation };
+    return { rating, xG, chances, passes, tackles, controlPower, defensiveSecurity, hasGoalkeeper, goalkeeperFactor, players: playersInfo, squadSize, squadFactor, squadRatio, activityFactor, formationBonus, chemistryBonus, chemistryPairs, structureScore, formation };
 }
 
 function runMatchSimulationEngine(team1Name, team2Name) {
@@ -754,7 +823,7 @@ function runMatchSimulationEngine(team1Name, team2Name) {
     // Exact 100% Possession Distribution
     const totalControl = team1Stats.controlPower + team2Stats.controlPower;
     team1Stats.possession = totalControl > 0
-        ? Math.min(78, Math.max(22, Math.round((team1Stats.controlPower / totalControl) * 100)))
+        ? Math.min(82, Math.max(18, Math.round((team1Stats.controlPower / totalControl) * 100)))
         : 50;
     team2Stats.possession = 100 - team1Stats.possession;
 
@@ -769,15 +838,15 @@ function runMatchSimulationEngine(team1Name, team2Name) {
         team1Stats.xG = team1Stats.squadSize ? Math.max(0.1, parseFloat((team1Stats.xG - (Math.abs(ratingDiff) * 0.05)).toFixed(2))) : 0;
     }
 
-    team1Stats.xG = applyDefensivePressureToXg(team1Stats.xG, team2Stats.defensiveSecurity);
-    team2Stats.xG = applyDefensivePressureToXg(team2Stats.xG, team1Stats.defensiveSecurity);
+    team1Stats.xG = applyDefensivePressureToXg(team1Stats.xG, team2Stats.defensiveSecurity, team2Stats.hasGoalkeeper);
+    team2Stats.xG = applyDefensivePressureToXg(team2Stats.xG, team1Stats.defensiveSecurity, team1Stats.hasGoalkeeper);
 
     // --- PLAYER FORM ---
     let allPlayers = [...team1Stats.players, ...team2Stats.players];
 
     allPlayers.forEach(p => {
-        // Random performance form: Swings between -8 and +12 OVR
-        const formSwing = Math.floor(Math.random() * 21) - 8; 
+        // Small match-to-match swing; base quality remains the dominant signal.
+        const formSwing = Math.floor(Math.random() * 14) - 5;
         p.matchRating = clampOverall(p.rating + formSwing, MAX_BASE_MATCH_OVR);
         p.formSwing = formSwing;
         p.goals = 0;
@@ -932,10 +1001,11 @@ function reconcileMatchContributions(players, teamName, goalEvents) {
     });
 }
 
-function applyDefensivePressureToXg(xg, opponentDefensiveSecurity) {
+function applyDefensivePressureToXg(xg, opponentDefensiveSecurity, opponentHasGoalkeeper = true) {
     if (xg <= 0) return 0;
     const defensiveGap = 70 - opponentDefensiveSecurity;
-    const concessionModifier = Math.min(1.35, Math.max(0.82, 1 + (defensiveGap / 140)));
+    const goalkeeperModifier = opponentHasGoalkeeper ? 1 : 1.45;
+    const concessionModifier = Math.min(1.75, Math.max(0.72, (1 + (defensiveGap / 140)) * goalkeeperModifier));
     return parseFloat(Math.max(0.1, xg * concessionModifier).toFixed(2));
 }
 
@@ -962,10 +1032,11 @@ function hasChemistry(player, teammate) {
     return player.chemistryWith?.includes(teammate.name) || teammate.chemistryWith?.includes(player.name);
 }
 
-function scaleFinalOverall(rawScore) {
-    // Compress exceptional match scores smoothly around 106 OVR without imposing a hard final cap.
-    // Goals and assists still change the raw score substantially and therefore decide MOTM correctly.
-    return Math.round(106 + (12 * Math.tanh((rawScore - 106) / 65)));
+function scaleFinalOverall(rawScore, baseOverall) {
+    // Keep each player's base OVR as the anchor. Performance adds a diminishing bonus,
+    // so a low-rated player cannot jump into the same band as an elite player by luck alone.
+    const performanceDelta = rawScore - baseOverall;
+    return Math.round(baseOverall + (14 * Math.tanh(performanceDelta / 42)));
 }
 
 function determineManOfTheMatch({ team1Name, team2Name, team1Goals, team2Goals, team1Stats, team2Stats }) {
@@ -989,7 +1060,7 @@ function determineManOfTheMatch({ team1Name, team2Name, team1Goals, team2Goals, 
 
         const rawMotmScore = player.matchRating + goalBonus + assistBonus + defensiveBonus + midfieldBonus + resultBonus;
         player.motmScore = rawMotmScore;
-        player.finalOverall = scaleFinalOverall(rawMotmScore);
+        player.finalOverall = scaleFinalOverall(rawMotmScore, player.baseOverall);
 
         if (rawMotmScore > highestScore) {
             highestScore = rawMotmScore;

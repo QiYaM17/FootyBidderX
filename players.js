@@ -118,8 +118,24 @@ const playersData = [
       physical: 55, 
 
       basePrice: 70, 
-      positions: ["LM", "LW"], 
-      chemistryWith: ["Qiyam"] 
+      positions: ["GK", "LM", "LW"], 
+      chemistryWith: ["Qiyam", "Mason"] 
+    },
+
+    { name: "Mason",
+
+      overall: 82,
+
+      pace: 80, 
+      shooting: 75, 
+      passing: 70, 
+      dribbling: 70, 
+      defence: 70, 
+      physical: 70, 
+
+      basePrice: 85, 
+      positions: ["LB", "LM"], 
+      chemistryWith: ["Ethan"] 
     },
 
     // A Tier //

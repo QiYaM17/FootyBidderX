@@ -76,6 +76,9 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 .btn-primary:hover { background-color: #3a86ff; color: #ffffff; }
 .btn-secondary { background-color: #334155; color: #ffffff; }
 .btn-secondary:hover { background-color: #475569; }
+.btn-ai { width: 100%; background: #f72585; color: #ffffff; margin-bottom: 8px; }
+.btn-ai:hover { background: #d91b70; }
+.menu-hint { font-size: 0.78rem; color: #94a3b8; margin-bottom: 18px; }
 
 .panel { display: none; background-color: #1e293b; border-radius: 8px; padding: 20px; margin-top: 10px; }
 .panel.active { display: block; }
