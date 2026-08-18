@@ -21,9 +21,9 @@ const INITIAL_TIMER = 5;
 const POST_BID_TIMER = 5;
 const STARTING_BUDGET = 500;
 const MAX_SQUAD_SIZE = 5;
-const MAX_LOBBY_PLAYERS = 3;
-const TRANSFER_DURATION = 20;
-const TEAM_COLOURS = ["#4cc9f0", "#f72585", "#ffd166"];
+const MAX_LOBBY_PLAYERS = 4;
+const TRANSFER_DURATION = 30;
+const TEAM_COLOURS = ["#4cc9f0", "#f72585", "#ffd166", "#4ade80"];
 const MAX_MATCH_OVR = 110;
 const MAX_BASE_MATCH_OVR = 110;
 const POSITION_GROUPS = {
@@ -57,6 +57,7 @@ let pendingTradeOffers = [];
 let aiTradeInterval;
 let tournamentFixtures = [];
 let tournamentResults = [];
+let tournamentMode = 'round-robin';
 let selectedTournamentMatchIndex = 0;
 let liveCommentaryInterval;
 let aiBidInterval;
@@ -143,7 +144,7 @@ function setupHost() {
 
     peer.on('connection', (conn) => {
         if (hostConnections.length >= MAX_LOBBY_PLAYERS - 1 || Object.keys(gameRosters).length >= MAX_LOBBY_PLAYERS) {
-            rejectLobbyConnection(conn, 'This lobby already has the maximum of 3 players.');
+            rejectLobbyConnection(conn, `This lobby already has the maximum of ${MAX_LOBBY_PLAYERS} players.`);
             return;
         }
         hostConnections.push(conn);
@@ -167,7 +168,7 @@ function setupHost() {
                         ? 'That display name is already in use.'
                         : matchHasStarted
                             ? 'The game has already started. Please join a new lobby.'
-                            : 'This lobby already has the maximum of 3 players.';
+                            : `This lobby already has the maximum of ${MAX_LOBBY_PLAYERS} players.`;
                     rejectLobbyConnection(conn, message, 'JOIN_REJECTED');
                     return;
                 }
@@ -251,7 +252,7 @@ document.getElementById('connectBtn').addEventListener('click', () => {
             } else if (data.type === 'SHOW_TOURNAMENT_RESULTS') {
                 renderMatchResults(data.payload);
             } else if (data.type === 'LOBBY_FULL' || data.type === 'JOIN_REJECTED') {
-                document.getElementById('join-status').innerText = data.message || 'This lobby already has the maximum of 3 players.';
+                document.getElementById('join-status').innerText = data.message || `This lobby already has the maximum of ${MAX_LOBBY_PLAYERS} players.`;
             }
         });
     });
@@ -855,9 +856,41 @@ function handleClientTactics(playerName, tactics) {
 
 function executeTournamentPipeline() {
     const teams = Object.keys(gameRosters);
-    tournamentFixtures = teams.flatMap((team, index) => teams.slice(index + 1).map(opponent => ({ team1Name: team, team2Name: opponent })));
+    tournamentMode = teams.length === 4 ? 'bracket' : 'round-robin';
+    tournamentFixtures = tournamentMode === 'bracket'
+        ? buildFourTeamBracketFixtures(teams)
+        : teams.flatMap((team, index) => teams.slice(index + 1).map(opponent => ({ team1Name: team, team2Name: opponent })));
     tournamentResults = [];
     runTournamentFixture(0);
+}
+
+function buildFourTeamBracketFixtures(teams) {
+    const seeds = shuffleTeams(teams).map((name, index) => ({ name, seed: index + 1 }));
+    return [
+        {
+            round: 'Semi-final',
+            label: 'Semi-final 1',
+            team1Name: seeds[0].name,
+            team2Name: seeds[1].name,
+            seed1: seeds[0].seed,
+            seed2: seeds[1].seed
+        },
+        {
+            round: 'Semi-final',
+            label: 'Semi-final 2',
+            team1Name: seeds[2].name,
+            team2Name: seeds[3].name,
+            seed1: seeds[2].seed,
+            seed2: seeds[3].seed
+        }
+    ];
+}
+
+function shuffleTeams(teams) {
+    return [...teams]
+        .map(team => ({ team, sort: Math.random() }))
+        .sort((first, second) => first.sort - second.sort)
+        .map(item => item.team);
 }
 
 function runTournamentFixture(index) {
@@ -871,6 +904,9 @@ function runTournamentFixture(index) {
 
     const fixture = tournamentFixtures[index];
     const matchPayload = runMatchSimulationEngine(fixture.team1Name, fixture.team2Name);
+    matchPayload.fixtureLabel = fixture.label || `Match ${index + 1}`;
+    matchPayload.round = fixture.round || 'Match';
+    resolveKnockoutWinner(matchPayload, fixture);
     const timeline = buildMatchTimeline(matchPayload);
     matchPayload.commentary = timeline;
     const lineups = {
@@ -881,9 +917,10 @@ function runTournamentFixture(index) {
         [fixture.team1Name]: gameRosters[fixture.team1Name]?.teamColour || '#4cc9f0',
         [fixture.team2Name]: gameRosters[fixture.team2Name]?.teamColour || '#f72585'
     };
-    const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures: tournamentFixtures.length, lineups, teamColours };
+    const totalFixtures = getTournamentTotalFixtures();
+    const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures, lineups, teamColours };
     hostConnections.forEach(conn => conn.send(startMessage));
-    showLoadingScreen(fixture, index, tournamentFixtures.length, lineups, teamColours);
+    showLoadingScreen(fixture, index, totalFixtures, lineups, teamColours);
 
     let timelineIndex = 0;
     clearInterval(liveCommentaryInterval);
@@ -897,10 +934,53 @@ function runTournamentFixture(index) {
 
         clearInterval(liveCommentaryInterval);
         tournamentResults.push(matchPayload);
+        scheduleBracketFinalIfReady();
         hostConnections.forEach(conn => conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }));
         updateTournamentView(tournamentResults, matchPayload);
         setTimeout(() => runTournamentFixture(index + 1), 1200);
     }, LIVE_EVENT_INTERVAL_MS);
+}
+
+function getTournamentTotalFixtures() {
+    return tournamentMode === 'bracket' ? 3 : tournamentFixtures.length;
+}
+
+function scheduleBracketFinalIfReady() {
+    if (tournamentMode !== 'bracket' || tournamentFixtures.length !== 2 || tournamentResults.length !== 2) return;
+    const finalists = tournamentResults.map(match => match.winnerName).filter(Boolean);
+    if (finalists.length !== 2) return;
+    tournamentFixtures.push({
+        round: 'Final',
+        label: 'Final',
+        team1Name: finalists[0],
+        team2Name: finalists[1]
+    });
+}
+
+function resolveKnockoutWinner(matchPayload, fixture) {
+    if (tournamentMode !== 'bracket') return;
+    if (matchPayload.team1Goals > matchPayload.team2Goals) {
+        matchPayload.winnerName = matchPayload.team1Name;
+        return;
+    }
+    if (matchPayload.team2Goals > matchPayload.team1Goals) {
+        matchPayload.winnerName = matchPayload.team2Name;
+        return;
+    }
+
+    const team1PenaltyScore = matchPayload.team1Stats.rating + Math.random() * 18;
+    const team2PenaltyScore = matchPayload.team2Stats.rating + Math.random() * 18;
+    const team1Wins = team1PenaltyScore >= team2PenaltyScore;
+    matchPayload.winnerName = team1Wins ? matchPayload.team1Name : matchPayload.team2Name;
+    const winnerPens = 4 + Math.floor(Math.random() * 2);
+    const loserPens = Math.max(2, winnerPens - 1 - Math.floor(Math.random() * 2));
+    matchPayload.penaltyShootout = {
+        winner: matchPayload.winnerName,
+        score: team1Wins
+            ? `${winnerPens}-${loserPens}`
+            : `${loserPens}-${winnerPens}`
+    };
+    matchPayload.tieBreakerText = `${matchPayload.winnerName} win ${matchPayload.penaltyShootout.score} on penalties.`;
 }
 
 function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1, lineups = {}, teamColours = {}) {
@@ -908,7 +988,9 @@ function showLoadingScreen(fixture, fixtureIndex = 0, totalFixtures = 1, lineups
     document.getElementById('tactics-phase').style.display = 'none';
     document.getElementById('loading-phase').style.display = 'block';
     document.getElementById('match-results-phase').style.display = 'none';
-    document.getElementById('loading-countdown').innerText = `Match ${fixtureIndex + 1} of ${totalFixtures}: ${fixture.team1Name} vs ${fixture.team2Name}`;
+    const matchLabel = fixture.label || `Match ${fixtureIndex + 1}`;
+    const seedLabel = fixture.seed1 && fixture.seed2 ? `Seed ${fixture.seed1} vs Seed ${fixture.seed2}: ` : '';
+    document.getElementById('loading-countdown').innerText = `${matchLabel} (${fixtureIndex + 1} of ${totalFixtures}): ${seedLabel}${fixture.team1Name} vs ${fixture.team2Name}`;
     document.getElementById('live-match-score').innerText = `0' — ${fixture.team1Name} 0 - 0 ${fixture.team2Name}`;
     document.getElementById('commentary-feed').innerHTML = '';
     renderLivePitch(fixture, lineups, teamColours);
@@ -1005,6 +1087,7 @@ function animateLivePitchEvent(event) {
 
     let targetX = actorTargetX;
     let targetY = actorTargetY;
+    let possessionTeam = event.team;
     if (event.kind === 'shot') {
         targetX = clampNumber(actorTargetX + direction * 12, 6, 94);
         targetY = clampNumber(actorTargetY + (Math.random() * 8 - 4), 18, 82);
@@ -1012,10 +1095,13 @@ function animateLivePitchEvent(event) {
         targetX = isHome ? 94 : 6;
         targetY = 50;
     } else if (event.kind === 'pass' && !teamChanged) {
-        const teammate = findNearbyTeammate(markers, actor, direction);
+        const teammate = findPassReceiver(markers, actor, event.receiver, direction);
         if (teammate) {
-            targetX = parseFloat(teammate.style.left) || actorTargetX;
-            targetY = parseFloat(teammate.style.top) || actorTargetY;
+            const receiverPosition = getMarkerPosition(teammate);
+            targetX = receiverPosition.x;
+            targetY = receiverPosition.y;
+            actor.classList.remove('is-active');
+            teammate.classList.add('is-active');
         } else {
             targetX = clampNumber(actorTargetX + direction * 9, 6, 94);
         }
@@ -1024,8 +1110,8 @@ function animateLivePitchEvent(event) {
         targetX = actorTargetX;
         targetY = actorTargetY;
     }
-    targetX = limitMovement(livePitchState.ballX, targetX, event.kind === 'goal' ? 28 : 18);
-    targetY = limitMovement(livePitchState.ballY, targetY, event.kind === 'goal' ? 22 : 14);
+    targetX = limitMovement(livePitchState.ballX, targetX, event.kind === 'goal' || event.kind === 'pass' ? 28 : 18);
+    targetY = limitMovement(livePitchState.ballY, targetY, event.kind === 'goal' || event.kind === 'pass' ? 20 : 14);
 
     markers.filter(marker => marker !== actor).forEach(marker => {
         const sameTeam = marker.dataset.team === event.team;
@@ -1042,13 +1128,21 @@ function animateLivePitchEvent(event) {
 
     const ball = document.getElementById('live-ball');
     if (ball) {
-        ball.style.left = `${targetX}%`;
-        ball.style.top = `${targetY}%`;
+        setBallPosition(ball, targetX, targetY);
     }
-    livePitchState = { possessionTeam: event.team, ballX: targetX, ballY: targetY };
+    livePitchState = { possessionTeam, ballX: targetX, ballY: targetY };
+
+    if (event.kind === 'goal') {
+        setTimeout(() => resetBallForKickoff(event.concededTeam, markers), 1500);
+    }
 }
 
-function findNearbyTeammate(markers, actor, direction) {
+function findPassReceiver(markers, actor, receiverName, direction) {
+    const namedReceiver = markers.find(marker =>
+        receiverName && marker.dataset.player === receiverName && marker.dataset.team === actor.dataset.team
+    );
+    if (namedReceiver) return namedReceiver;
+
     const actorX = parseFloat(actor.style.left) || 50;
     const actorY = parseFloat(actor.style.top) || 50;
     return markers
@@ -1061,6 +1155,40 @@ function findNearbyTeammate(markers, actor, direction) {
             return { marker, score: distance + (isForward ? 0 : 18) };
         })
         .sort((first, second) => first.score - second.score)[0]?.marker;
+}
+
+function resetBallForKickoff(concededTeam, markers) {
+    const currentMarkers = markers?.length ? markers : Array.from(document.querySelectorAll('.pitch-player'));
+    const kickoffPlayer = findKickoffPlayer(currentMarkers, concededTeam);
+    currentMarkers.forEach(marker => marker.classList.remove('is-active'));
+    if (kickoffPlayer) kickoffPlayer.classList.add('is-active');
+
+    const ball = document.getElementById('live-ball');
+    if (ball) setBallPosition(ball, 50, 50);
+    livePitchState = { possessionTeam: concededTeam || null, ballX: 50, ballY: 50 };
+}
+
+function findKickoffPlayer(markers, teamName) {
+    const candidates = markers.filter(marker => marker.dataset.team === teamName);
+    if (!candidates.length) return null;
+    return candidates
+        .map(marker => {
+            const position = getMarkerPosition(marker);
+            return { marker, distance: Math.abs(position.x - 50) + Math.abs(position.y - 50) };
+        })
+        .sort((first, second) => first.distance - second.distance)[0].marker;
+}
+
+function getMarkerPosition(marker) {
+    return {
+        x: parseFloat(marker.style.left) || 50,
+        y: parseFloat(marker.style.top) || 50
+    };
+}
+
+function setBallPosition(ball, x, y) {
+    ball.style.left = `${x}%`;
+    ball.style.top = `${y}%`;
 }
 
 function clampNumber(value, min, max) {
@@ -1238,14 +1366,21 @@ function buildMatchTimeline(match) {
         const pool = matching.length ? matching : teamStats.players;
         return pool[Math.floor(Math.random() * pool.length)] || { name: 'A player', pos: 'CM' };
     };
-    const side = () => Math.random() < 0.5
-        ? { name: match.team1Name, stats: match.team1Stats }
-        : { name: match.team2Name, stats: match.team2Stats };
+    const sides = [
+        { name: match.team1Name, stats: match.team1Stats },
+        { name: match.team2Name, stats: match.team2Stats }
+    ];
+    let sideIndex = Math.random() < 0.5 ? 0 : 1;
+    const nextSideForEvent = eventKind => {
+        if (eventKind === 'interception') sideIndex = sideIndex === 0 ? 1 : 0;
+        return sides[sideIndex];
+    };
     const standardMinutes = [1, 5, 9, 15, 21, 28, 34, 41, 48, 55, 62, 69, 75, 82, 87];
     const eventFactories = [
         selected => {
             const actor = randomPlayer(selected.stats, 'MID');
-            return { kind: 'pass', team: selected.name, actor: actor.name, text: `${actor.name} keeps the move flowing with a sharp pass for ${selected.name}.` };
+            const receiver = randomTeammate(selected.stats.players, actor);
+            return { kind: 'pass', team: selected.name, actor: actor.name, receiver: receiver.name, text: `${actor.name} keeps the move flowing with a sharp pass to ${receiver.name}.` };
         },
         selected => {
             const actor = randomPlayer(selected.stats, 'DEF');
@@ -1273,8 +1408,10 @@ function buildMatchTimeline(match) {
         }
     ];
     const timeline = standardMinutes.map((minute, index) => {
-        const selected = side();
-        const event = eventFactories[index % eventFactories.length](selected);
+        const factoryIndex = index % eventFactories.length;
+        const possessionChangeEvent = factoryIndex === 1 || factoryIndex === 6;
+        const selected = nextSideForEvent(possessionChangeEvent ? 'interception' : 'possession');
+        const event = eventFactories[factoryIndex](selected);
         if (index === 2) event.kind = 'card';
         return { minute, ...event };
     });
@@ -1291,6 +1428,7 @@ function buildMatchTimeline(match) {
             team: goal.team,
             actor: goal.scorer,
             assist: goal.assist,
+            concededTeam: goal.team === match.team1Name ? match.team2Name : match.team1Name,
             text: `GOAL! ${goal.scorer} scores a ${goal.type.toLowerCase()} for ${goal.team}.${assistText}`,
             score: `${match.team1Name} ${score1} - ${score2} ${match.team2Name}`
         });
@@ -1301,7 +1439,24 @@ function buildMatchTimeline(match) {
         text: `Full time: ${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}.`,
         score: `${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}`
     });
+    if (match.tieBreakerText) {
+        timeline.push({
+            minute: 91,
+            kind: 'set-piece',
+            team: match.winnerName,
+            actor: match.winnerName,
+            text: match.tieBreakerText,
+            score: `${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}`
+        });
+    }
     return timeline.sort((first, second) => first.minute - second.minute || (first.kind === 'goal' ? 1 : -1));
+}
+
+function randomTeammate(players, actor) {
+    const teammates = players.filter(player => player.name !== actor.name);
+    const forwardOptions = teammates.filter(player => ['MID', 'ATT'].includes(POSITION_GROUPS[player.pos]));
+    const pool = forwardOptions.length ? forwardOptions : teammates;
+    return pool[Math.floor(Math.random() * pool.length)] || actor;
 }
 
 function updateTournamentView(results, currentMatch) {
@@ -1470,11 +1625,18 @@ function renderMatchResults(payload) {
 
 function renderFixtureResults(results, selectedIndex = 0) {
     const fixtureResults = document.getElementById('fixture-results');
-    fixtureResults.innerHTML = results.map((match, index) => `
-        <button type="button" class="fixture-result ${index === selectedIndex ? 'active' : ''}" data-match-index="${index}" aria-pressed="${index === selectedIndex}">
-            ${match.team1Name} <strong>${match.team1Goals} - ${match.team2Goals}</strong> ${match.team2Name}
-        </button>
-    `).join('');
+    fixtureResults.innerHTML = results.map((match, index) => {
+        const winnerLabel = match.winnerName ? `<span class="fixture-winner">Winner: ${match.winnerName}</span>` : '';
+        const penaltyLabel = match.penaltyShootout ? `<span class="fixture-winner">Pens ${match.penaltyShootout.score}</span>` : '';
+        return `
+            <button type="button" class="fixture-result ${index === selectedIndex ? 'active' : ''}" data-match-index="${index}" aria-pressed="${index === selectedIndex}">
+                <span>${match.fixtureLabel || `Match ${index + 1}`}</span>
+                ${match.team1Name} <strong>${match.team1Goals} - ${match.team2Goals}</strong> ${match.team2Name}
+                ${winnerLabel}
+                ${penaltyLabel}
+            </button>
+        `;
+    }).join('');
 }
 
 function selectTournamentMatch(index) {
@@ -1497,7 +1659,9 @@ function renderSelectedMatchDetails(payload) {
             </span>
         </div>` : '';
     document.getElementById('scoreboard-header').innerHTML = `
+        <span class="match-stage-label">${payload.fixtureLabel || payload.round || 'Match'}</span>
         ${payload.team1Name} ${payload.team1Goals} - ${payload.team2Goals} ${payload.team2Name}
+        ${payload.tieBreakerText ? `<div class="tie-breaker-summary">${payload.tieBreakerText}</div>` : ''}
         ${motmSummary}
     `;
 

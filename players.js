@@ -43,13 +43,28 @@ const playersData = [
       pace: 60, 
       shooting: 60, 
       passing: 50, 
-      dribbling: 80, 
+      dribbling: 60, 
       defence: 55, 
       physical: 40, 
 
       basePrice: 35, 
       positions: ["ST"], 
       chemistryWith: [] 
+    },
+
+    { name: "Harvey", 
+      overall: 60,
+
+      pace: 60, 
+      shooting: 65, 
+      passing: 50, 
+      dribbling: 61, 
+      defence: 65, 
+      physical: 40, 
+
+      basePrice: 35, 
+      positions: ["CB"], 
+      chemistryWith: ["Ethan", "Mason"] 
     },
 
   // D Tier //
@@ -86,9 +101,39 @@ const playersData = [
       chemistryWith: [] 
     },
 
+    { name: "Ismael", 
+      overall: 72,
+
+      pace: 50, 
+      shooting: 50, 
+      passing: 75, 
+      dribbling: 50, 
+      defence: 70, 
+      physical: 90,
+
+      basePrice: 40, 
+      positions: ["GK"],
+      chemistryWith: [] 
+    }, 
+
   // C Tier // 
 
 
+
+    { name: "Sulaiman (Bangladesh)", 
+      overall: 72,
+
+      pace: 79, 
+      shooting: 84, 
+      passing: 70, 
+      dribbling: 79, 
+      defence: 75, 
+      physical: 70, 
+
+      basePrice: 40, 
+      positions: ["GK", "CDM", "RW"],
+      chemistryWith: ["Irfaan", "Arya", "Amelia"] 
+    },
 
     { name: "Liya", 
       overall: 73,
@@ -105,19 +150,19 @@ const playersData = [
       chemistryWith: ["Irfaan", "Arya", "Amelia"] 
     },
 
-    { name: "Sulaiman (Bangladesh)", 
-      overall: 74,
+    { name: "Zeshaan", 
+      overall: 70,
 
-      pace: 79, 
-      shooting: 84, 
-      passing: 70, 
-      dribbling: 79, 
-      defence: 75, 
-      physical: 70, 
+      pace: 50, 
+      shooting: 70, 
+      passing: 90, 
+      dribbling: 60, 
+      defence: 90, 
+      physical: 90,
 
-      basePrice: 40, 
-      positions: ["GK", "CDM", "RW"],
-      chemistryWith: ["Irfaan", "Arya", "Amelia"] 
+      basePrice: 65, 
+      positions: ["CM", "CDM"],
+      chemistryWith: ["Irfaan", "Ebrahim"] 
     },
 
     { name: "Ryan", 
