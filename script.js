@@ -41,6 +41,7 @@ let transferTimerInterval;
 let transferTimeLeft = TRANSFER_DURATION;
 let transferPhaseActive = false;
 let pendingTradeOffers = [];
+let aiTradeInterval;
 let tournamentFixtures = [];
 let tournamentResults = [];
 let selectedTournamentMatchIndex = 0;
@@ -382,6 +383,7 @@ function startTransferPhase() {
     pendingTradeOffers = [];
     Object.entries(gameRosters).forEach(([name, roster]) => { roster.readyForTactics = aiMode && name === AI_TEAM_NAME; });
     broadcastTransferState('START_TRANSFER');
+    if (aiMode) scheduleAiTrades();
     startTransferTimer();
 }
 
@@ -487,8 +489,18 @@ function createTradeOffer({ name, targetTeam, myPlayer, theirPlayer }) {
     const owner = gameRosters[name];
     const target = gameRosters[targetTeam];
     if (!owner || !target || name === targetTeam || !owner.squad.includes(myPlayer) || !target.squad.includes(theirPlayer)) return;
+    if (pendingTradeOffers.some(offer => offer.from === name && offer.to === targetTeam && offer.theirPlayer === myPlayer && offer.myPlayer === theirPlayer)) return;
     pendingTradeOffers.push({ id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, from: name, to: targetTeam, theirPlayer: myPlayer, myPlayer: theirPlayer });
     broadcastTransferState('TRANSFER_STATE');
+    if (aiMode && targetTeam === AI_TEAM_NAME) {
+        const aiValue = playersData.find(player => player.name === theirPlayer)?.overall || 50;
+        const offeredValue = playersData.find(player => player.name === myPlayer)?.overall || 50;
+        const accepted = offeredValue + 5 >= aiValue || Math.random() < 0.28;
+        setTimeout(() => {
+            const offer = pendingTradeOffers.find(item => item.from === name && item.to === AI_TEAM_NAME && item.theirPlayer === myPlayer && item.myPlayer === theirPlayer);
+            if (offer) respondToTrade(AI_TEAM_NAME, offer.id, accepted);
+        }, 700 + Math.random() * 900);
+    }
 }
 
 function respondToTrade(ownerName, offerId, accepted) {
@@ -511,6 +523,38 @@ function respondToTradeOffer(offerId, accepted) {
     else connectionToHost.send({ type: 'RESPOND_TRADE', name: myName, offerId, accepted });
 }
 
+function scheduleAiTrades() {
+    clearInterval(aiTradeInterval);
+    // Check at human-like intervals so the market has time for players to react.
+    aiTradeInterval = setInterval(() => {
+        if (!transferPhaseActive || transferTimeLeft <= 0) return;
+        const aiRoster = gameRosters[AI_TEAM_NAME];
+        const targets = Object.keys(gameRosters).filter(name => name !== AI_TEAM_NAME && gameRosters[name].squad.length);
+        if (!aiRoster?.squad.length || !targets.length || Math.random() > 0.62) return;
+
+        const targetTeam = targets[Math.floor(Math.random() * targets.length)];
+        const targetRoster = gameRosters[targetTeam];
+        if (pendingTradeOffers.some(offer => offer.from === AI_TEAM_NAME && offer.to === targetTeam)) return;
+
+        const aiPlayer = chooseAiTradePlayer(aiRoster.squad, targetRoster.squad, true);
+        const requestedPlayer = chooseAiTradePlayer(targetRoster.squad, aiRoster.squad, false);
+        if (!aiPlayer || !requestedPlayer) return;
+        createTradeOffer({ name: AI_TEAM_NAME, targetTeam, myPlayer: aiPlayer, theirPlayer: requestedPlayer });
+    }, 2800);
+}
+
+function chooseAiTradePlayer(sourceSquad, comparisonSquad, offering) {
+    const comparisonAverage = comparisonSquad.reduce((sum, name) => {
+        return sum + (playersData.find(player => player.name === name)?.overall || 50);
+    }, 0) / Math.max(1, comparisonSquad.length);
+    const choices = sourceSquad.map(name => {
+        const overall = playersData.find(player => player.name === name)?.overall || 50;
+        const targetValue = offering ? Math.max(50, comparisonAverage - 8) : comparisonAverage + 4;
+        return { name, score: Math.abs(overall - targetValue) + Math.random() * 12 };
+    }).sort((a, b) => a.score - b.score);
+    return choices[0]?.name || null;
+}
+
 function markReadyForTactics(playerName) {
     if (!gameRosters[playerName]) return;
     gameRosters[playerName].readyForTactics = true;
@@ -524,6 +568,7 @@ function markReadyForTactics(playerName) {
 
 function beginTacticsPhase() {
     transferPhaseActive = false;
+    clearInterval(aiTradeInterval);
     pendingTradeOffers = [];
     hostConnections.forEach(conn => conn.send({ type: 'START_TACTICS', rosters: gameRosters }));
     initTacticsPhase(gameRosters);
