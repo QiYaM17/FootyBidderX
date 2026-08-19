@@ -65,6 +65,8 @@
         <div class="bidding-area">
             <div class="header-info">
                 <h2>My Budget: £<span id="my-budget">500</span>M</h2>
+                <h2 id="auction-progress" class="auction-progress"></h2>
+                <h2 id="bidding-formation" class="formation-label">Formation: -</h2>
                 <h2 id="timer-display" class="timer">Time Left: 5s</h2>
             </div>
             
@@ -132,10 +134,19 @@
             <button id="close-market-btn" class="btn btn-primary" style="margin-top: 18px;">Ready for Tactics</button>
         </div>
         
-        <!-- Phase 2: Tactics Selection -->
+        <!-- Phase 2: Formation Selection -->
+        <div id="formation-phase" class="bidding-area" style="display: none; width: 100%;">
+            <h1>Choose Your Formation</h1>
+            <p class="subtitle">Pick your shape first. The numbers show goalkeeper, defenders, midfielders and attackers. You may use 0 or 1 goalkeeper.</p>
+            <div id="formation-options" class="formation-options"></div>
+            <p id="formation-status" class="power-card-status">Choose a formation to continue.</p>
+        </div>
+
+        <!-- Phase 3: Tactics Selection -->
         <div id="tactics-phase" class="bidding-area" style="width: 100%;">
             <h1>Set Your Lineup</h1>
-            <h2 id="tactics-timer" class="timer" style="margin: 10px 0;">Tactics Time: 20s</h2>
+            <h2 id="tactics-timer" class="timer" style="margin: 10px 0;">Tactics Time: 30s</h2>
+            <p id="tactics-formation" class="formation-label">Formation: -</p>
             <p class="subtitle">Assign unique positions. Natural positions, a balanced formation and chemistry all matter.</p>
             
             <div id="team-builder-list" style="text-align: left; margin-bottom: 20px;"></div>

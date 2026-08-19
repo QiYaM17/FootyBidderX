@@ -36,6 +36,8 @@ body {
 .teams-sidebar { flex: 1; }
 
 .player-card { margin: 20px auto; max-width: 300px; }
+.auction-progress { color: #4cc9f0; font-size: 1.05rem; }
+.formation-label { color: #cbd5e1; font-size: 0.95rem; }
 .player-stats {
     display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
     background-color: #1e293b; padding: 15px; border-radius: 8px; margin-top: 15px;
@@ -96,6 +98,27 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
 .power-card-status { color: #94a3b8; font-weight: 600; }
 
 /* Tactics Row */
+.formation-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    max-height: 48vh;
+    overflow-y: auto;
+    margin: 18px 0;
+}
+
+.formation-option h3 {
+    font-size: 1.55rem;
+    letter-spacing: 1px;
+    margin: 4px 0 8px;
+}
+
+.formation-option p {
+    margin: 0;
+    color: #cbd5e1;
+    font-size: 0.82rem;
+}
+
 .builder-row {
     display: flex; justify-content: space-between; align-items: center;
     background-color: #0f172a; padding: 12px; margin-bottom: 10px;

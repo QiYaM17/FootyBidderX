@@ -32,10 +32,10 @@ const POSITION_GROUPS = {
     LW: "ATT", RW: "ATT", ST: "ATT"
 };
 const POWER_CARD_POOL = [
-    { id: "clock-master", phase: "Bidding", name: "Clock Master", description: "Your successful bids reset the auction clock to 7 seconds instead of 5.", effects: { bidTimerBonus: 2 } },
+    { id: "midfield-overload", phase: "Match", name: "Midfield Overload", description: "Add 8% control power in every match.", effects: { controlBonus: 0.08 } },
     { id: "bargain-hunter", phase: "Bidding", name: "Bargain Hunter", description: "Pay 10% less whenever you win an auction.", effects: { purchaseDiscount: 0.10 } },
-    { id: "market-negotiator", phase: "Transfers", name: "Market Negotiator", description: "The AI is much more willing to accept your swap offers.", effects: { aiTradeAcceptanceBonus: 10 } },
-    { id: "trade-magnet", phase: "Transfers", name: "Trade Magnet", description: "The AI is more likely to approach you with a swap offer.", effects: { aiTradeInterest: 3 } },
+    { id: "transfer-budget", phase: "Transfers", name: "Transfer Budget", description: "Start the transfer market with £15M of extra budget.", effects: { transferBudget: 15 } },
+    { id: "defensive-coach", phase: "Match", name: "Defensive Coach", description: "Improve your defensive security by 8% in every match.", effects: { defenceBonus: 0.08 } },
     { id: "formation-maestro", phase: "Tactics", name: "Formation Maestro", description: "A balanced formation gives an extra team-rating boost.", effects: { formationBonus: 0.05 } },
     { id: "chemistry-catalyst", phase: "Tactics", name: "Chemistry Catalyst", description: "Chemistry links have a stronger impact on your team.", effects: { chemistryBonus: 0.04 } },
     { id: "positional-expert", phase: "Tactics", name: "Positional Expert", description: "Out-of-position players suffer a smaller penalty.", effects: { positionRecovery: 0.10 } },
@@ -47,7 +47,14 @@ const POWER_CARD_POOL = [
 
 // Tactics & Simulation State
 let tacticsTimerInterval;
-let tacticsTimeLeft = 20;
+let tacticsTimeLeft = 30;
+let tacticsPhaseActive = false;
+let tacticsFallbackTimeout;
+let formationPhaseActive = false;
+let formationStartScheduled = false;
+let formationOptionsByPlayer = {};
+let formationPhaseComplete = false;
+let matchPipelineStarted = false;
 let lockedTactics = {};
 let hasSubmittedTactics = false;
 let transferTimerInterval;
@@ -183,7 +190,7 @@ function setupHost() {
                 const senderName = connectionOwners.get(conn);
                 processBid(data.amount, senderName);
             } else if (data.type === 'SUBMIT_TACTICS') {
-                handleClientTactics(connectionOwners.get(conn), data.tactics);
+                handleClientTactics(connectionOwners.get(conn), data.tactics, data.formation);
             } else if (data.type === 'OFFER_TRADE') {
                 createTradeOffer({ ...data, name: connectionOwners.get(conn) });
             } else if (data.type === 'RESPOND_TRADE') {
@@ -192,6 +199,8 @@ function setupHost() {
                 markReadyForTactics(connectionOwners.get(conn));
             } else if (data.type === 'SELECT_POWER_CARD') {
                 selectPowerCard(connectionOwners.get(conn), data.cardId);
+            } else if (data.type === 'SELECT_FORMATION') {
+                selectFormation(connectionOwners.get(conn), data.label);
             }
         });
     });
@@ -239,6 +248,10 @@ document.getElementById('connectBtn').addEventListener('click', () => {
                 initPowerCardDraft(data.drafts, data.rosters);
             } else if (data.type === 'START_TACTICS') {
                 initTacticsPhase(data.rosters);
+            } else if (data.type === 'START_FORMATION') {
+                initFormationPhase(data.rosters);
+            } else if (data.type === 'FORMATION_STATE') {
+                syncFormationState(data.state);
             } else if (data.type === 'START_TRANSFER') {
                 initTransferPhase(data.rosters, data.timeLeft);
             } else if (data.type === 'TRANSFER_STATE') {
@@ -291,7 +304,9 @@ function chooseAiPowerCard(options) {
         "defensive-drill": 6,
         "counter-attack": 5,
         "bargain-hunter": 4,
-        "clock-master": 3
+        "midfield-overload": 5,
+        "transfer-budget": 3,
+        "defensive-coach": 5
     };
     return [...options].sort((first, second) => (priorities[second.id] || 2) - (priorities[first.id] || 2) + (Math.random() - 0.5))[0];
 }
@@ -307,7 +322,7 @@ function getPowerCardEffects(teamName) {
 
 function broadcastPowerCardState(type) {
     const payload = { type, drafts: powerCardDrafts, rosters: gameRosters };
-    hostConnections.forEach(conn => conn.send(payload));
+    hostConnections.forEach(conn => { if (conn.open) conn.send(payload); });
     initPowerCardDraft(powerCardDrafts, gameRosters);
 }
 
@@ -350,6 +365,87 @@ function selectPowerCard(playerName, cardId) {
     if (Object.values(gameRosters).every(roster => roster.powerCard) && !powerCardStartScheduled) {
         powerCardStartScheduled = true;
         powerCardPhaseActive = false;
+        setTimeout(beginFormationPhase, 700);
+    }
+}
+
+function getFormationOptions() {
+    const options = [];
+    for (let goalkeeper = 0; goalkeeper <= 1; goalkeeper++) {
+        for (let defenders = 0; defenders <= 3; defenders++) {
+            for (let midfielders = 0; midfielders <= 5; midfielders++) {
+                const attackers = MAX_SQUAD_SIZE - goalkeeper - defenders - midfielders;
+                if (attackers < 0 || attackers > 3) continue;
+                options.push({ goalkeeper, defenders, midfielders, attackers, label: `${goalkeeper}-${defenders}-${midfielders}-${attackers}` });
+            }
+        }
+    }
+    return options.sort(() => Math.random() - 0.5).slice(0, 3);
+}
+
+function beginFormationPhase() {
+    if (formationPhaseActive || formationPhaseComplete) return;
+    formationPhaseActive = true;
+    formationStartScheduled = false;
+    formationOptionsByPlayer = {};
+    Object.entries(gameRosters).forEach(([name, roster]) => {
+        roster.formation = null;
+        formationOptionsByPlayer[name] = getFormationOptions();
+    });
+    broadcastFormationState('START_FORMATION');
+    if (aiMode) {
+        const options = formationOptionsByPlayer[AI_TEAM_NAME] || [];
+        const selected = options.find(option => option.goalkeeper === 1 && option.defenders > 0 && option.midfielders > 0) || options[0];
+        if (selected) selectFormation(AI_TEAM_NAME, selected.label);
+    }
+}
+
+function broadcastFormationState(type) {
+    const state = { rosters: gameRosters, options: formationOptionsByPlayer };
+    hostConnections.forEach(conn => { if (conn.open) conn.send({ type, rosters: gameRosters, state }); });
+    initFormationPhase(gameRosters, formationOptionsByPlayer);
+}
+
+function initFormationPhase(rosters, options = null) {
+    gameRosters = rosters || gameRosters;
+    formationOptionsByPlayer = options || formationOptionsByPlayer;
+    menuScreen.style.display = 'none';
+    gameScreen.style.display = 'none';
+    endScreen.style.display = 'flex';
+    powerCardScreen.style.display = 'none';
+    document.getElementById('transfer-phase').style.display = 'none';
+    document.getElementById('formation-phase').style.display = 'block';
+    document.getElementById('tactics-phase').style.display = 'none';
+    const optionsForMe = formationOptionsByPlayer[myName] || getFormationOptions();
+    const selected = gameRosters[myName]?.formation;
+    document.getElementById('formation-options').innerHTML = optionsForMe.map(option => `
+        <button class="power-card formation-option" type="button" onclick="selectFormationOption('${option.label}')" ${selected ? 'disabled' : ''}>
+            <h3>${option.label}</h3><p>${option.goalkeeper} GK · ${option.defenders} DEF · ${option.midfielders} MID · ${option.attackers} ATT</p>
+        </button>`).join('');
+    document.getElementById('formation-status').innerText = selected
+        ? `Selected ${selected}. Waiting for the other managers…`
+        : 'Choose a formation to continue.';
+}
+
+function syncFormationState(state) {
+    if (!state) return;
+    initFormationPhase(state.rosters, state.options);
+}
+
+function selectFormationOption(label) {
+    if (isHost) selectFormation(myName, label);
+    else connectionToHost?.send({ type: 'SELECT_FORMATION', label });
+}
+
+function selectFormation(playerName, label) {
+    if (!formationPhaseActive || !gameRosters[playerName] || gameRosters[playerName].formation) return;
+    if (!(formationOptionsByPlayer[playerName] || []).some(option => option.label === label)) return;
+    gameRosters[playerName].formation = label;
+    broadcastFormationState('FORMATION_STATE');
+    if (Object.values(gameRosters).every(roster => roster.formation) && !formationStartScheduled) {
+        formationStartScheduled = true;
+        formationPhaseActive = false;
+        formationPhaseComplete = true;
         setTimeout(startNextRound, 700);
     }
 }
@@ -467,16 +563,19 @@ function broadcastState() {
         bid: currentBid,
         leader: highestBidder,
         time: timeLeft,
+        playerNumber: currentCard ? playersData.length - availablePlayers.length : 0,
+        totalPlayers: playersData.length,
         rosters: gameRosters
     };
     syncGameState(state);
-    hostConnections.forEach(conn => conn.send({ type: 'UPDATE_STATE', state }));
+    hostConnections.forEach(conn => { if (conn.open) conn.send({ type: 'UPDATE_STATE', state }); });
 }
 
 // --- 7. UI BIDDING UPDATES ---
 function syncGameState(state) {
     menuScreen.style.display = 'none';
     powerCardScreen.style.display = 'none';
+    endScreen.style.display = 'none';
     gameScreen.style.display = 'flex';
 
     if (state.card) {
@@ -492,6 +591,10 @@ function syncGameState(state) {
     }
 
     currentBid = state.bid;
+    const progress = document.getElementById('auction-progress');
+    if (progress) progress.innerText = state.card ? `Player ${state.playerNumber} / ${state.totalPlayers}` : '';
+    const biddingFormation = document.getElementById('bidding-formation');
+    if (biddingFormation) biddingFormation.innerText = `Formation: ${state.rosters[myName]?.formation || '-'}`;
     document.getElementById('current-bid').innerText = state.bid;
     document.getElementById('highest-bidder').innerText = `Highest Bidder: ${state.leader}`;
     document.getElementById('timer-display').innerText = state.time > 0 ? `Time Left: ${state.time}s` : "SOLD!";
@@ -512,6 +615,7 @@ function syncGameState(state) {
         teamsList.innerHTML += `
             <div class="team-block" style="border-left: 4px solid ${data.teamColour || '#4cc9f0'};">
                 <h4><span><i class="team-colour-dot" style="background:${data.teamColour || '#4cc9f0'}"></i>${name}</span> <span>${data.squad.length}/${MAX_SQUAD_SIZE} players · £${data.money}M</span></h4>
+                <p class="formation-label">Formation: ${data.formation || 'Not selected'}</p>
                 <p class="power-card-label">${getPowerCard(name)?.name || 'Choosing game plan…'}</p>
                 <ul>${playersHtml || "<li>No players yet</li>"}</ul>
             </div>
@@ -524,7 +628,10 @@ function startTransferPhase() {
     transferPhaseActive = true;
     transferTimeLeft = TRANSFER_DURATION;
     pendingTradeOffers = [];
-    Object.entries(gameRosters).forEach(([name, roster]) => { roster.readyForTactics = aiMode && name === AI_TEAM_NAME; });
+    Object.entries(gameRosters).forEach(([name, roster]) => {
+        roster.money += getPowerCardEffects(name).transferBudget || 0;
+        roster.readyForTactics = aiMode && name === AI_TEAM_NAME;
+    });
     broadcastTransferState('START_TRANSFER');
     if (aiMode) scheduleAiTrades();
     startTransferTimer();
@@ -549,10 +656,10 @@ function getTransferState() {
 function broadcastTransferState(type) {
     const state = getTransferState();
     if (type === 'START_TRANSFER') {
-        hostConnections.forEach(conn => conn.send({ type, rosters: gameRosters, timeLeft: transferTimeLeft }));
+        hostConnections.forEach(conn => { if (conn.open) conn.send({ type, rosters: gameRosters, timeLeft: transferTimeLeft }); });
         initTransferPhase(gameRosters, transferTimeLeft);
     } else {
-        hostConnections.forEach(conn => conn.send({ type, state }));
+        hostConnections.forEach(conn => { if (conn.open) conn.send({ type, state }); });
         syncTransferState(state);
     }
 }
@@ -564,6 +671,7 @@ function initTransferPhase(rosters, timeLeft = TRANSFER_DURATION) {
     gameScreen.style.display = 'none';
     endScreen.style.display = 'flex';
     document.getElementById('transfer-phase').style.display = 'block';
+    document.getElementById('formation-phase').style.display = 'none';
     document.getElementById('tactics-phase').style.display = 'none';
     document.getElementById('loading-phase').style.display = 'none';
     document.getElementById('match-results-phase').style.display = 'none';
@@ -713,29 +821,32 @@ function markReadyForTactics(playerName) {
 }
 
 function beginTacticsPhase() {
+    if (formationPhaseActive || tacticsPhaseActive || matchPipelineStarted) return;
+    tacticsPhaseActive = true;
     transferPhaseActive = false;
+    clearInterval(transferTimerInterval);
     clearInterval(aiTradeInterval);
     pendingTradeOffers = [];
-    hostConnections.forEach(conn => conn.send({ type: 'START_TACTICS', rosters: gameRosters }));
+    hostConnections.forEach(conn => { if (conn.open) conn.send({ type: 'START_TACTICS', rosters: gameRosters }); });
     initTacticsPhase(gameRosters);
-    if (aiMode) handleClientTactics(AI_TEAM_NAME, buildAiTactics(gameRosters[AI_TEAM_NAME].squad));
+    if (aiMode) {
+        const aiRoster = gameRosters[AI_TEAM_NAME];
+        handleClientTactics(AI_TEAM_NAME, buildAiTactics(aiRoster?.squad || []), aiRoster?.formation);
+    }
+    clearTimeout(tacticsFallbackTimeout);
+    tacticsFallbackTimeout = setTimeout(forceCompleteTacticsPhase, 32000);
 }
 
 function buildAiTactics(squad) {
-    const availablePositions = ["GK", "CB", "LB", "RB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "ST"];
-    const tactics = {};
-    squad.forEach((name, index) => {
-        const player = playersData.find(item => item.name === name);
-        const preferred = (player?.positions || []).find(position => !Object.values(tactics).includes(position));
-        tactics[name] = preferred || availablePositions.find(position => !Object.values(tactics).includes(position)) || availablePositions[index];
-    });
-    return tactics;
+    return buildCompleteTactics(squad, gameRosters[AI_TEAM_NAME]?.formation);
 }
 
 // --- 8. TACTICS PHASE ---
 function initTacticsPhase(rosters) {
-    gameRosters = rosters;
+    gameRosters = rosters || gameRosters;
     lockedTactics = {};
+    matchPipelineStarted = false;
+    tacticsPhaseActive = true;
     hasSubmittedTactics = false;
     gameScreen.style.display = 'none';
     endScreen.style.display = 'flex';
@@ -743,12 +854,13 @@ function initTacticsPhase(rosters) {
     document.getElementById('tactics-phase').style.display = 'block';
     document.getElementById('lockTacticsBtn').disabled = false;
     document.getElementById('lockTacticsBtn').innerText = 'Lock In Tactics';
+    document.getElementById('tactics-formation').innerText = `Formation: ${gameRosters[myName]?.formation || '-'}`;
 
-    const mySquad = rosters[myName].squad;
+    const mySquad = gameRosters[myName]?.squad || [];
     const builderList = document.getElementById('team-builder-list');
     builderList.innerHTML = "";
     
-    const positions = ["ST", "LW", "RW", "CAM", "CM", "CDM", "LM", "RM", "LB", "CB", "RB", "GK"];
+    const positions = getAllowedPositions(gameRosters[myName]?.formation, mySquad.length);
     let optionsHtml = positions.map(pos => `<option value="${pos}">${pos}</option>`).join('');
 
     mySquad.forEach(playerName => {
@@ -779,11 +891,23 @@ function validateUniquePositions(e) {
     if (hasDuplicates) {
         showCustomAlert("Each position can only be used ONCE!");
         e.target.value = "";
+        return;
+    }
+    const formation = parseFormation(gameRosters[myName]?.formation);
+    const counts = selectedValues.reduce((result, position) => {
+        const group = POSITION_GROUPS[position];
+        result[group] = (result[group] || 0) + 1;
+        return result;
+    }, {});
+    const limits = { GK: formation.goalkeeper, DEF: formation.defenders, MID: formation.midfielders, ATT: formation.attackers };
+    if (Object.entries(counts).some(([group, count]) => count > (limits[group] || 0))) {
+        showCustomAlert('That position group is full for your formation.');
+        e.target.value = '';
     }
 }
 
 function startTacticsTimer() {
-    tacticsTimeLeft = 20;
+    tacticsTimeLeft = 30;
     clearInterval(tacticsTimerInterval);
     
     tacticsTimerInterval = setInterval(() => {
@@ -803,55 +927,71 @@ document.getElementById('lockTacticsBtn').addEventListener('click', () => {
 
 function autoSubmitTactics() {
     if (hasSubmittedTactics) return;
-    const selects = document.querySelectorAll('.pos-select');
-    const availablePos = ["GK", "CB", "LB", "RB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "ST"];
-    
-    selects.forEach((select, idx) => {
-        if (!select.value) {
-            const player = playersData.find(item => item.name === select.dataset.player);
-            const preferred = (player?.positions || []).find(pos => !Array.from(selects).some(other => other !== select && other.value === pos));
-            select.value = preferred || availablePos.find(pos => !Array.from(selects).some(other => other !== select && other.value === pos)) || availablePos[idx];
-        }
-    });
     submitTactics();
 }
 
 function submitTactics() {
     if (hasSubmittedTactics) return;
-    
     const selects = document.querySelectorAll('.pos-select');
-    const myTactics = {};
-    let isComplete = true;
-
-    selects.forEach(select => {
-        if (!select.value) isComplete = false;
-        myTactics[select.getAttribute('data-player')] = select.value;
-    });
-
-    if (!isComplete && tacticsTimeLeft > 0) {
-        showCustomAlert(`Please assign all ${selects.length} positions!`);
-        return;
-    }
+    const chosenTactics = Object.fromEntries(Array.from(selects).map(select => [select.getAttribute('data-player'), select.value]));
+    const myRoster = gameRosters[myName] || { squad: [], formation: null };
+    const myTactics = buildCompleteTactics(myRoster.squad, myRoster.formation, chosenTactics);
+    selects.forEach(select => { select.value = myTactics[select.getAttribute('data-player')] || ''; });
 
     hasSubmittedTactics = true;
     document.getElementById('lockTacticsBtn').disabled = true;
     document.getElementById('lockTacticsBtn').innerText = "Tactics Locked In!";
 
     if (isHost) {
-        handleClientTactics(myName, myTactics);
+        handleClientTactics(myName, myTactics, gameRosters[myName]?.formation);
     } else {
-        connectionToHost.send({ type: 'SUBMIT_TACTICS', name: myName, tactics: myTactics });
+        connectionToHost?.send({ type: 'SUBMIT_TACTICS', name: myName, tactics: myTactics, formation: gameRosters[myName]?.formation });
     }
 }
 
 // --- 9. MATCH SIMULATION ENGINE ---
-function handleClientTactics(playerName, tactics) {
-    lockedTactics[playerName] = tactics;
+function handleClientTactics(playerName, tactics, formation) {
+    if (!gameRosters[playerName] || !formation || !(formationOptionsByPlayer[playerName] || []).some(option => option.label === formation)) return;
+    if (lockedTactics[playerName]) return;
+    lockedTactics[playerName] = buildCompleteTactics(gameRosters[playerName].squad, formation, tactics);
     const totalPlayers = Object.keys(gameRosters).length;
 
-    if (Object.keys(lockedTactics).length >= totalPlayers) {
+    if (Object.keys(lockedTactics).length >= totalPlayers && !matchPipelineStarted) {
+        clearTimeout(tacticsFallbackTimeout);
+        tacticsPhaseActive = false;
+        matchPipelineStarted = true;
         executeTournamentPipeline();
     }
+}
+
+function buildCompleteTactics(squad, formation, requestedTactics = {}) {
+    const chosen = {};
+    const usedPositions = new Set();
+    const groupCounts = { GK: 0, DEF: 0, MID: 0, ATT: 0 };
+    const availablePositions = getAllowedPositions(formation);
+    const canUse = position => {
+        const group = POSITION_GROUPS[position];
+        return availablePositions.includes(position)
+            && !usedPositions.has(position)
+            && groupCounts[group] < getFormationGroupLimit(formation, group);
+    };
+
+    squad.forEach(name => {
+        const player = playersData.find(item => item.name === name);
+        const position = [requestedTactics[name], ...(player?.positions || []), ...availablePositions].find(canUse);
+        if (!position) return;
+        chosen[name] = position;
+        usedPositions.add(position);
+        groupCounts[POSITION_GROUPS[position]]++;
+    });
+    return chosen;
+}
+
+function forceCompleteTacticsPhase() {
+    if (!isHost || matchPipelineStarted || !tacticsPhaseActive) return;
+    Object.entries(gameRosters).forEach(([name, roster]) => {
+        if (!lockedTactics[name]) handleClientTactics(name, buildCompleteTactics(roster.squad, roster.formation), roster.formation);
+    });
 }
 
 function executeTournamentPipeline() {
@@ -862,6 +1002,26 @@ function executeTournamentPipeline() {
         : teams.flatMap((team, index) => teams.slice(index + 1).map(opponent => ({ team1Name: team, team2Name: opponent })));
     tournamentResults = [];
     runTournamentFixture(0);
+}
+
+function parseFormation(label) {
+    const values = String(label || '0-0-0-0').split('-').map(Number);
+    return { goalkeeper: values[0] || 0, defenders: values[1] || 0, midfielders: values[2] || 0, attackers: values[3] || 0 };
+}
+
+function getAllowedPositions(label, squadSize = MAX_SQUAD_SIZE) {
+    const formation = parseFormation(label);
+    const positions = [];
+    if (formation.goalkeeper) positions.push('GK');
+    if (formation.defenders) positions.push('CB', 'LB', 'RB');
+    if (formation.midfielders) positions.push('CDM', 'CM', 'CAM', 'LM', 'RM');
+    if (formation.attackers) positions.push('LW', 'RW', 'ST');
+    return positions.length ? positions : ['CM'];
+}
+
+function getFormationGroupLimit(label, group) {
+    const formation = parseFormation(label);
+    return { GK: formation.goalkeeper, DEF: formation.defenders, MID: formation.midfielders, ATT: formation.attackers }[group] || 0;
 }
 
 function buildFourTeamBracketFixtures(teams) {
@@ -897,7 +1057,7 @@ function runTournamentFixture(index) {
     if (index >= tournamentFixtures.length) {
         const lastMatch = tournamentResults[tournamentResults.length - 1];
         const payload = { ...lastMatch, tournamentResults };
-        hostConnections.forEach(conn => conn.send({ type: 'SHOW_TOURNAMENT_RESULTS', payload }));
+        hostConnections.forEach(conn => { if (conn.open) conn.send({ type: 'SHOW_TOURNAMENT_RESULTS', payload }); });
         renderMatchResults(payload);
         return;
     }
@@ -919,7 +1079,7 @@ function runTournamentFixture(index) {
     };
     const totalFixtures = getTournamentTotalFixtures();
     const startMessage = { type: 'START_MATCH', fixture, fixtureIndex: index, totalFixtures, lineups, teamColours };
-    hostConnections.forEach(conn => conn.send(startMessage));
+    hostConnections.forEach(conn => { if (conn.open) conn.send(startMessage); });
     showLoadingScreen(fixture, index, totalFixtures, lineups, teamColours);
 
     let timelineIndex = 0;
@@ -927,7 +1087,7 @@ function runTournamentFixture(index) {
     liveCommentaryInterval = setInterval(() => {
         const event = timeline[timelineIndex++];
         if (event) {
-            hostConnections.forEach(conn => conn.send({ type: 'COMMENTARY_EVENT', event }));
+            hostConnections.forEach(conn => { if (conn.open) conn.send({ type: 'COMMENTARY_EVENT', event }); });
             appendCommentaryEvent(event);
             return;
         }
@@ -935,7 +1095,7 @@ function runTournamentFixture(index) {
         clearInterval(liveCommentaryInterval);
         tournamentResults.push(matchPayload);
         scheduleBracketFinalIfReady();
-        hostConnections.forEach(conn => conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }));
+        hostConnections.forEach(conn => { if (conn.open) conn.send({ type: 'MATCH_FINISHED', results: tournamentResults, currentMatch: matchPayload }); });
         updateTournamentView(tournamentResults, matchPayload);
         setTimeout(() => runTournamentFixture(index + 1), 1200);
     }, LIVE_EVENT_INTERVAL_MS);
