@@ -233,3 +233,35 @@ input[type="color"] { width: 48px; height: 38px; padding: 3px; border: 1px solid
     .game-layout { padding: 10px; }
     .bidding-area, .teams-sidebar { padding: 18px; }
 }
+
+/* Game Mode Dropdown Styling */
+#game-mode-select {
+    width: 100%;
+    padding: 12px 14px;
+    background-color: #1a1f2c;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    color: #ffffff;
+    font-size: 1rem;
+    font-family: inherit;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234cc9f0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    background-size: 1em;
+    cursor: pointer;
+}
+
+#game-mode-select:focus {
+    outline: none;
+    border-color: #4cc9f0;
+    box-shadow: 0 0 0 2px rgba(76, 201, 240, 0.2);
+}
+
+#game-mode-select option {
+    background-color: #1a1f2c;
+    color: #ffffff;
+    padding: 10px;
+}

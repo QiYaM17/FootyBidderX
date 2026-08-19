@@ -97,7 +97,7 @@ const playersData = [
       chemistryWith: [] 
     },
 
-    { name: "Ismael", 
+    { name: "Esmail", 
       overall: 69,
 
       pace: 50, 
@@ -154,7 +154,7 @@ const playersData = [
       defence: 75, 
       physical: 70, 
 
-      basePrice: 30, 
+      basePrice: 40, 
       positions: ["GK", "CDM", "RW"],
       chemistryWith: ["Irfaan", "Arya", "Amelia"] 
     },
@@ -184,7 +184,7 @@ const playersData = [
       defence: 60, 
       physical: 60, 
 
-      basePrice: 30, 
+      basePrice: 40, 
       positions: ["ST", "RW"],
       chemistryWith: ["Benjamin"] 
     },

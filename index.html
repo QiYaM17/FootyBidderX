@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Footy Bidder X - Multiplayer</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/png" href="FootyBidderXIcon.png">
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -27,6 +28,15 @@
             <span id="team-colour-value">#4CC9F0</span>
         </div>
 
+        <div class="input-group">
+            <label for="game-mode-select">Game Mode</label>
+            <select id="game-mode-select" aria-label="Choose your squad size">
+                <option value="5">5-a-side (£500M Budget)</option>
+                <option value="7">7-a-side (£750M Budget)</option>
+                <option value="11">11-a-side (£1B Budget)</option>
+            </select>
+        </div>
+        
         <div class="actions">
             <button id="createBtn" class="btn btn-primary">Create Lobby</button>
             <button id="joinBtn" class="btn btn-secondary">Join Lobby</button>
