@@ -35,17 +35,17 @@ const POSITION_GROUPS = {
     LW: "ATT", RW: "ATT", ST: "ATT", CF: "ATT", ST2: "ATT"
 };
 const POWER_CARD_POOL = [
-    { id: "midfield-overload", phase: "Match", name: "Midfield Overload", description: "Add 8% control power in every match.", effects: { controlBonus: 0.08 } },
-    { id: "bargain-hunter", phase: "Bidding", name: "Bargain Hunter", description: "Pay 10% less whenever you win an auction.", effects: { purchaseDiscount: 0.10 } },
-    { id: "transfer-budget", phase: "Transfers", name: "Transfer Budget", description: "Start the transfer market with £15M of extra budget.", effects: { transferBudget: 15 } },
-    { id: "defensive-coach", phase: "Match", name: "Defensive Coach", description: "Improve your defensive security by 8% in every match.", effects: { defenceBonus: 0.08 } },
-    { id: "formation-maestro", phase: "Tactics", name: "Formation Maestro", description: "A balanced formation gives an extra team-rating boost.", effects: { formationBonus: 0.05 } },
-    { id: "chemistry-catalyst", phase: "Tactics", name: "Chemistry Catalyst", description: "Chemistry links have a stronger impact on your team.", effects: { chemistryBonus: 0.04 } },
+    { id: "midfield-overload", phase: "Match", name: "Midfield Overload", description: "Add 10% control power in every match.", effects: { controlBonus: 0.1 } },
+    { id: "bargain-hunter", phase: "Bidding", name: "Bargain Hunter", description: "Pay 15% less whenever you win an auction.", effects: { purchaseDiscount: 0.15 } },
+    { id: "transfer-budget", phase: "Transfers", name: "Transfer Budget", description: "Start the transfer market with £20M of extra budget.", effects: { transferBudget: 20 } },
+    { id: "defensive-coach", phase: "Match", name: "Defensive Coach", description: "Improve your defensive security by 10% in every match.", effects: { defenceBonus: 0.1 } },
+    { id: "formation-maestro", phase: "Tactics", name: "Formation Maestro", description: "A balanced formation gives an extra team-rating boost.", effects: { formationBonus: 0.08 } },
+    { id: "chemistry-catalyst", phase: "Tactics", name: "Chemistry Catalyst", description: "Chemistry links have a stronger impact on your team.", effects: { chemistryBonus: 0.08 } },
     { id: "positional-expert", phase: "Tactics", name: "Positional Expert", description: "Out-of-position players suffer a smaller penalty.", effects: { positionRecovery: 0.10 } },
-    { id: "pressing-plan", phase: "Tactics", name: "Pressing Plan", description: "Gain more control of the ball and make more tackles.", effects: { controlBonus: 0.10, tackleBonus: 0.14 } },
-    { id: "counter-attack", phase: "Tactics", name: "Counter Attack", description: "Create 10% more expected goals from your attacks.", effects: { xgBonus: 0.10 } },
-    { id: "defensive-drill", phase: "Tactics", name: "Defensive Drill", description: "Improve defensive security, especially without a goalkeeper.", effects: { defenceBonus: 0.12, noGoalkeeperCover: 0.18 } },
-    { id: "set-piece-specialists", phase: "Tactics", name: "Set-Piece Specialists", description: "A small extra expected-goals boost from dead-ball situations.", effects: { xgBonus: 0.07, chemistryBonus: 0.01 } }
+    { id: "pressing-plan", phase: "Tactics", name: "Pressing Plan", description: "Gain more control of the ball and make more tackles.", effects: { controlBonus: 0.15, tackleBonus: 0.18 } },
+    { id: "counter-attack", phase: "Tactics", name: "Counter Attack", description: "Create 15% more expected goals from your attacks.", effects: { xgBonus: 0.15 } },
+    { id: "defensive-drill", phase: "Tactics", name: "Defensive Drill", description: "Improve defensive security, especially without a goalkeeper.", effects: { defenceBonus: 0.15, noGoalkeeperCover: 0.2 } },
+    { id: "set-piece-specialists", phase: "Tactics", name: "Set-Piece Specialists", description: "A small extra expected-goals boost from dead-ball situations.", effects: { xgBonus: 0.1, chemistryBonus: 0.05 } }
 ];
 
 // Tactics & Simulation State
@@ -1077,16 +1077,20 @@ function getAllowedPositions(label, squadSize = MAX_SQUAD_SIZE) {
     const formation = parseFormation(label);
     const positions = [];
     
-    if (formation.goalkeeper) positions.push('GK');
+    // If the formation requires a goalkeeper, add the GK option
+    if (formation.goalkeeper > 0) positions.push('GK');
     
+    // If the formation has defenders, add ALL defensive positions to the pool
     const defPool = ['CB', 'LB', 'RB', 'LWB', 'RWB', 'CB2', 'CB3'];
-    if (formation.defenders) positions.push(...defPool.slice(0, formation.defenders));
+    if (formation.defenders > 0) positions.push(...defPool);
     
+    // If the formation has midfielders, add ALL midfield positions to the pool
     const midPool = ['CM', 'CDM', 'CAM', 'LM', 'RM', 'CM2', 'CDM2'];
-    if (formation.midfielders) positions.push(...midPool.slice(0, formation.midfielders));
+    if (formation.midfielders > 0) positions.push(...midPool);
     
+    // If the formation has attackers, add ALL attacking positions to the pool
     const attPool = ['ST', 'LW', 'RW', 'CF', 'ST2'];
-    if (formation.attackers) positions.push(...attPool.slice(0, formation.attackers));
+    if (formation.attackers > 0) positions.push(...attPool);
     
     return positions.length ? positions : ['CM'];
 }
@@ -1579,32 +1583,82 @@ function runMatchSimulationEngine(team1Name, team2Name) {
         p.motmScore = p.matchRating;
     });
 
-    let team1Goals = simulateGoals(team1Stats.xG);
-    let team2Goals = simulateGoals(team2Stats.xG);
-
+    // Tracking Setup for Set Pieces & Goals
+    let team1Goals = 0;
+    let team2Goals = 0;
     const goalEvents = [];
+    const missedEvents = [];
+
+    // Helper to simulate dynamic penalties and free kicks based on stats
+    function simulateSetPieces(teamStats, teamName, opponentName) {
+        let setPieceGoals = 0;
+        const penalties = Math.random() < 0.20 ? 1 : 0; // 20% chance of a penalty occurring
+        const freekicks = Math.floor(Math.random() * 3); // 0 to 2 free kicks occurring
+        
+        const processSetPiece = (type, isPenalty) => {
+            if (!teamStats.players.length) return;
+            
+            // Pick the player with the best shooting stat
+            const taker = teamStats.players.reduce((best, p) => 
+                (p.player.shooting > best.player.shooting) ? p : best
+            , teamStats.players[0]);
+            
+            // Base probabilities plus a bonus based on how much their shooting exceeds 50
+            const baseProb = isPenalty ? 0.76 : 0.12;
+            const statBonus = (taker.player.shooting - 50) * (isPenalty ? 0.004 : 0.005);
+            const prob = baseProb + statBonus;
+            
+            const minute = Math.floor(Math.random() * 88) + 2;
+            
+            if (Math.random() < prob) {
+                setPieceGoals++;
+                taker.goals++; 
+                goalEvents.push({
+                    minute, team: teamName, scorer: taker.name, assist: null, type: type
+                });
+            } else {
+                missedEvents.push({
+                    minute, team: teamName, taker: taker.name, type: type, opponent: opponentName
+                });
+            }
+        };
+
+        for(let i=0; i<penalties; i++) processSetPiece("Penalty", true);
+        for(let i=0; i<freekicks; i++) processSetPiece("Free Kick", false);
+        return setPieceGoals;
+    }
+
+    // Process set pieces for both teams
+    team1Goals += simulateSetPieces(team1Stats, team1Name, team2Name);
+    team2Goals += simulateSetPieces(team2Stats, team2Name, team1Name);
+
+    // Calculate remaining xG for open play goals
+    const remainingXG1 = Math.max(0.1, team1Stats.xG - team1Goals);
+    const remainingXG2 = Math.max(0.1, team2Stats.xG - team2Goals);
+    
+    const openPlayGoals1 = simulateGoals(remainingXG1);
+    const openPlayGoals2 = simulateGoals(remainingXG2);
+    
+    team1Goals += openPlayGoals1;
+    team2Goals += openPlayGoals2;
+
     const shotTypes = ["Power Shot", "Finesse Shot", "Header", "Tap-in", "Volley", "Long Range Screamer"];
 
-    generateGoalEvents(team1Name, team1Goals, team1Stats.players, goalEvents, shotTypes);
-    generateGoalEvents(team2Name, team2Goals, team2Stats.players, goalEvents, shotTypes);
+    generateGoalEvents(team1Name, openPlayGoals1, team1Stats.players, goalEvents, shotTypes);
+    generateGoalEvents(team2Name, openPlayGoals2, team2Stats.players, goalEvents, shotTypes);
 
     goalEvents.sort((a, b) => a.minute - b.minute);
     reconcileMatchContributions(team1Stats.players, team1Name, goalEvents);
     reconcileMatchContributions(team2Stats.players, team2Name, goalEvents);
     const motm = determineManOfTheMatch({
-        team1Name,
-        team2Name,
-        team1Goals,
-        team2Goals,
-        team1Stats,
-        team2Stats
+        team1Name, team2Name, team1Goals, team2Goals, team1Stats, team2Stats
     });
 
     return {
         team1Name, team2Name,
         team1Goals, team2Goals,
         team1Stats, team2Stats,
-        goalEvents,
+        goalEvents, missedEvents, // Output misses to the timeline constructor
         motm
     };
 }
@@ -1615,6 +1669,7 @@ function buildMatchTimeline(match) {
         const pool = matching.length ? matching : teamStats.players;
         return pool[Math.floor(Math.random() * pool.length)] || { name: 'A player', pos: 'CM' };
     };
+    
     const sides = [
         { name: match.team1Name, stats: match.team1Stats },
         { name: match.team2Name, stats: match.team2Stats }
@@ -1624,6 +1679,7 @@ function buildMatchTimeline(match) {
         if (eventKind === 'interception') sideIndex = sideIndex === 0 ? 1 : 0;
         return sides[sideIndex];
     };
+    
     const standardMinutes = [1, 5, 9, 15, 21, 28, 34, 41, 48, 55, 62, 69, 75, 82, 87];
     const eventFactories = [
         selected => {
@@ -1656,6 +1712,7 @@ function buildMatchTimeline(match) {
             return { kind: 'interception', team: selected.name, actor: actor.name, text: `${actor.name} wins the ball back cleanly for ${selected.name}.` };
         }
     ];
+    
     const timeline = standardMinutes.map((minute, index) => {
         const factoryIndex = index % eventFactories.length;
         const possessionChangeEvent = factoryIndex === 1 || factoryIndex === 6;
@@ -1667,6 +1724,7 @@ function buildMatchTimeline(match) {
 
     let score1 = 0;
     let score2 = 0;
+    
     match.goalEvents.forEach(goal => {
         if (goal.team === match.team1Name) score1++;
         else score2++;
@@ -1682,12 +1740,29 @@ function buildMatchTimeline(match) {
             score: `${match.team1Name} ${score1} - ${score2} ${match.team2Name}`
         });
     });
+    
+    // Inject missed set pieces into the match events
+    if (match.missedEvents) {
+        match.missedEvents.forEach(miss => {
+            timeline.push({
+                minute: miss.minute,
+                kind: miss.type === 'Penalty' ? 'shot' : 'set-piece', // Tied to your live pitch animations
+                team: miss.team,
+                actor: miss.taker,
+                text: miss.type === 'Penalty' 
+                    ? `PENALTY MISSED! ${miss.taker} steps up for ${miss.team} but the keeper saves it!`
+                    : `FREE KICK MISSED! ${miss.taker} bends a dangerous free kick for ${miss.team} just wide of the post.`
+            });
+        });
+    }
+
     timeline.push({
         minute: 90,
         kind: 'full-time',
         text: `Full time: ${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}.`,
         score: `${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}`
     });
+    
     if (match.tieBreakerText) {
         timeline.push({
             minute: 91,
@@ -1698,6 +1773,7 @@ function buildMatchTimeline(match) {
             score: `${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}`
         });
     }
+    
     return timeline.sort((first, second) => first.minute - second.minute || (first.kind === 'goal' ? 1 : -1));
 }
 
@@ -1729,16 +1805,25 @@ function simulateGoals(xg) {
 }
 
 function generateGoalEvents(teamName, goalCount, players, goalEvents, shotTypes) {
-    if (!players.length) return;
+    if (!players.length || goalCount <= 0) return; // Safeguard against zero or negative goals
+    
+    // Rebalance weights so GKs virtually never score open play goals
     const weightedPlayers = players.map(player => ({
         player,
-        weight: Math.max(1, player.rating * (POSITION_GROUPS[player.pos] === "ATT" ? 1.45 : POSITION_GROUPS[player.pos] === "MID" ? 0.9 : 0.35))
+        weight: Math.max(0.01, player.rating * (
+            POSITION_GROUPS[player.pos] === "ATT" ? 1.45 : 
+            POSITION_GROUPS[player.pos] === "MID" ? 0.9 : 
+            POSITION_GROUPS[player.pos] === "DEF" ? 0.35 : 0.01 // Goalkeepers barely get weighted
+        ))
     }));
+    
     const totalWeight = weightedPlayers.reduce((sum, item) => sum + item.weight, 0);
+    
     for (let i = 0; i < goalCount; i++) {
         const minute = Math.floor(Math.random() * 88) + 2;
         let roll = Math.random() * totalWeight;
         let selected = weightedPlayers[weightedPlayers.length - 1].player;
+        
         for (const item of weightedPlayers) {
             roll -= item.weight;
             if (roll <= 0) {
@@ -1746,6 +1831,7 @@ function generateGoalEvents(teamName, goalCount, players, goalEvents, shotTypes)
                 break;
             }
         }
+        
         selected.goals += 1;
         const assister = selectAssister(players, selected);
         if (assister) assister.assists += 1;
