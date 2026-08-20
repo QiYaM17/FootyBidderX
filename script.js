@@ -386,19 +386,18 @@ function selectPowerCard(playerName, cardId) {
 
 function getFormationOptions() {
     const options = [];
-    for (let goalkeeper = 0; goalkeeper <= 1; goalkeeper++) {
-        for (let defenders = 0; defenders <= 5; defenders++) {
-            for (let midfielders = 0; midfielders <= 6; midfielders++) {
-                const attackers = MAX_SQUAD_SIZE - goalkeeper - defenders - midfielders;
-                
-                if (attackers < 0 || attackers > 4) continue;
-                if (MAX_SQUAD_SIZE > 5 && defenders === 0) continue; 
-                
-                options.push({ 
-                    goalkeeper, defenders, midfielders, attackers, 
-                    label: `${goalkeeper}-${defenders}-${midfielders}-${attackers}` 
-                });
-            }
+    const goalkeeper = 1; // 3. Force 1 Goalkeeper
+    for (let defenders = 0; defenders <= 5; defenders++) {
+        for (let midfielders = 0; midfielders <= 6; midfielders++) {
+            const attackers = MAX_SQUAD_SIZE - goalkeeper - defenders - midfielders;
+            
+            if (attackers < 0 || attackers > 4) continue;
+            if (MAX_SQUAD_SIZE > 5 && defenders === 0) continue; 
+            
+            options.push({ 
+                goalkeeper, defenders, midfielders, attackers, 
+                label: `${goalkeeper}-${defenders}-${midfielders}-${attackers}` 
+            });
         }
     }
     return options.sort(() => Math.random() - 0.5).slice(0, 3);
@@ -588,7 +587,8 @@ function broadcastState() {
         time: timeLeft,
         playerNumber: currentCard ? playersData.length - availablePlayers.length : 0,
         totalPlayers: playersData.length,
-        rosters: gameRosters
+        rosters: gameRosters,
+        maxSquadSize: MAX_SQUAD_SIZE // Broadcast the lobby mode!
     };
     syncGameState(state);
     hostConnections.forEach(conn => { if (conn.open) conn.send({ type: 'UPDATE_STATE', state }); });
@@ -601,6 +601,11 @@ function syncGameState(state) {
     endScreen.style.display = 'none';
     gameScreen.style.display = 'flex';
 
+    // 1. Sync MAX_SQUAD_SIZE from the host
+    if (state.maxSquadSize) {
+        MAX_SQUAD_SIZE = state.maxSquadSize;
+    }
+
     if (state.card) {
         const playerImg = document.getElementById('player-icon');
         playerImg.src = `photocards/${state.card.name}PhotoCard.png`;
@@ -610,6 +615,9 @@ function syncGameState(state) {
         };
 
         document.getElementById('player-name').innerText = state.card.name;
+        // 2. Display preferred positions
+        const posText = state.card.positions && state.card.positions.length > 0 ? state.card.positions.join(', ') : 'Any';
+        document.getElementById('player-positions').innerText = `POS: ${posText}`;
         document.getElementById('player-pace').innerText = `PAC: ${state.card.pace}`;
         document.getElementById('player-shooting').innerText = `SHO: ${state.card.shooting}`;
         document.getElementById('player-passing').innerText = `PAS: ${state.card.passing}`;
@@ -1302,7 +1310,8 @@ function animateLivePitchEvent(event) {
     const movementByKind = {
         pass: 7,
         shot: 10,
-        'set-piece': 6,
+        'set-piece': 8,
+        'penalty-shootout': 12, // Move fast for penalties
         goal: 14,
         foul: 4,
         interception: 3,
@@ -1327,6 +1336,10 @@ function animateLivePitchEvent(event) {
     } else if (event.kind === 'goal') {
         targetX = isHome ? 98 : 2; 
         targetY = 50;
+    } else if (event.kind === 'set-piece' || event.kind === 'penalty-shootout') {
+        // NEW: Focus set pieces and penalties on the goal zones
+        targetX = isHome ? 88 : 12; // Go straight to the penalty box
+        targetY = clampNumber(actorTargetY + (Math.random() * 8 - 4), 35, 65); // Center near the goal
     } else if (event.kind === 'pass' && !teamChanged) {
         const teammate = findPassReceiver(markers, actor, event.receiver, direction);
         if (teammate) {
@@ -1678,10 +1691,10 @@ function buildMatchTimeline(match) {
     if (match.tieBreakerText) {
         timeline.push({
             minute: 91,
-            kind: 'set-piece',
+            kind: 'penalty-shootout',
             team: match.winnerName,
             actor: match.winnerName,
-            text: match.tieBreakerText,
+            text: `PENALTY SHOOTOUT: ${match.tieBreakerText}`,
             score: `${match.team1Name} ${match.team1Goals} - ${match.team2Goals} ${match.team2Name}`
         });
     }
